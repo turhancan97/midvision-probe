@@ -1,0 +1,14 @@
+_target_: evals.datasets.unreal_position.UnrealRelativePosition
+root: /path/to/dataset/position_between_objects/forest
+split: train
+image_size: 224
+image_mean: imagenet
+reference_label: Tree
+target_label: Human
+exclude_ambiguous: true
+ambiguity_degrees: 15
+front_degrees: 45
+back_degrees: 135
+split_ratio: 0.2
+test_ratio: 0.1
+name: unreal_position

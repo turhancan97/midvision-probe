@@ -1,0 +1,36 @@
+system:
+  random_seed: 8
+  num_gpus: 1
+  port: 12367
+note: ""
+batch_size: 64
+wandb:
+  use: False
+  eval_images: False
+defaults:
+  - optimizer: twenty_epoch
+  - backbone: clip_b16_laion
+  - dataset: unreal_position
+  - probe: classifier
+  - _self_
+experiment_name: SSL_Position_Between_Objects
+experiment_model: clip_b16_laion
+is_eval: False
+ckpt_path: ""
+output_dir: "result"
+backbone:
+  return_cls: false
+  mean_pool: true
+probe:
+  num_classes: 4
+dataset:
+  exclude_ambiguous: true
+  split: train
+sweep:
+  enable: False
+  max_trials: 6
+  learning_rates: [0.001]
+  weight_decays: [0.01, 0.001, 0.0001]
+  patience: 3
+  eval_every_epochs: 1
+  final_fit: true
