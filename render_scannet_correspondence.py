@@ -257,7 +257,7 @@ def main(cfg: DictConfig):
         wandb.log({f"3D Recall ({_th:.2f}m)": recall_3d_i})  # Log to WandB
 
     # 2D error metrics
-    px_thresh = [1, 2, 5, 15, 25, 35, 50]
+    px_thresh = [1, 2, 5, 10, 15, 20, 25, 35, 50]
     for _th in px_thresh:
         recall_i = 100 * (err_2d < _th).float().mean()
         print(f"Recall at {_th:>2d} pixels:  {recall_i:.2f}")
@@ -268,7 +268,7 @@ def main(cfg: DictConfig):
 
     results = []
     rec_2cm = 100 * (err_3d < 0.02).float().mean(dim=1)
-    bin_rec = compute_binned_performance(rec_2cm, rel_ang, [0, 30, 60, 90, 120])
+    bin_rec = compute_binned_performance(rec_2cm, rel_ang, [0, 15, 30, 60, 180])
     for bin_acc in enumerate(bin_rec):
         results.append(f"{bin_acc[0] * 100:5.02f}")
         wandb.log({f"Bin Rec {i * 30}-{(i + 1) * 30}°": bin_acc * 100})
@@ -287,7 +287,9 @@ def main(cfg: DictConfig):
         "2D Recall (1px)",
         "2D Recall (2px)",
         "2D Recall (5px)",
+        "2D Recall (10px)",
         "2D Recall (15px)",
+        "2D Recall (20px)",
         "2D Recall (25px)",
         "2D Recall (35px)",
         "2D Recall (50px)",
@@ -299,10 +301,10 @@ def main(cfg: DictConfig):
         "3D Recall (0.3m)",
         "3D Recall (0.4m)",
         "3D Recall (0.5m)",
-        "Bin Rec 0-30°",
+        "Bin Rec 0-15°",
+        "Bin Rec 15-30°",
         "Bin Rec 30-60°",
-        "Bin Rec 60-90°",
-        "Bin Rec 90-120°",
+        "Bin Rec 60-180°",
     ]
     exp_info = [
         model.checkpoint_name,
