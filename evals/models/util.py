@@ -9,7 +9,7 @@ import torchvision
 import wget
 from mmselfsup.models.backbones import ResNet
 
-ckpt_dir = "/p/openvocabdustr/probing_midlevel_vision/code/probe3d/evals/models/checkpoint_weights"
+ckpt_dir = "pretrained_models"
 os.makedirs(ckpt_dir, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
