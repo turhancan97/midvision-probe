@@ -51,7 +51,7 @@ def build_loader(cfg, split, batch_size, num_gpus=1, **kwargs):
     sampler = DistributedSampler(dataset) if use_ddp else None
     shuffle = (split == "train") and not use_ddp
     # n_workers = min(len(os.sched_getaffinity(0)), 2)
-    n_workers = 0
+    n_workers = 8
 
     loader = DataLoader(
         dataset,

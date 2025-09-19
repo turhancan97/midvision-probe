@@ -456,3 +456,26 @@ class MultiscaleHead(nn.Module):
         feats = self.conv_mid(feats).relu()
         feats = interpolate(feats, scale_factor=4, mode="bilinear")
         return self.conv_out(feats)
+
+
+class ClassificationHead(nn.Module):
+    def __init__(self, feat_dim: int, num_classes: int, use_layernorm: bool = True, dropout_rate: float = 0.0):
+        super().__init__()
+        self.name = "cls_linear"
+        self.dropout_rate = dropout_rate
+        self.use_layernorm = use_layernorm
+        self.norm = nn.LayerNorm(feat_dim) if use_layernorm else None
+        self.dropout = nn.Dropout(dropout_rate)
+        self.classifier = nn.Linear(feat_dim, num_classes)
+
+    def forward(self, feats):
+        # feats is expected to be [B, D] (e.g., CLS token)
+        if isinstance(feats, (list, tuple)):
+            # If provided as a list of tensors, concatenate along feature dim
+            feats = torch.cat(feats, dim=-1)
+        if feats.dim() > 2:
+            feats = feats.view(feats.size(0), -1)
+        if self.norm is not None:
+            feats = self.norm(feats)
+        feats = self.dropout(feats)
+        return self.classifier(feats)

@@ -1,0 +1,7 @@
+_target_: evals.datasets.imagenette.ImagenetteDataset
+root: /shared/results/common/kargin/unreal_engine
+split: train
+load_size: 224
+image_mean: imagenet
+download: false
+name: imagenette
