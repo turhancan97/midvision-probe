@@ -5,14 +5,14 @@ from torchvision.transforms import Resize
 from torchvision.transforms.functional import to_tensor
 import torch.nn as nn
 
+import sys
 
-class DINO(torch.nn.Module):
+
+class VGGT1B(torch.nn.Module):
     def __init__(
         self,
-        dino_name="dino",
-        model_name="vitb16",
+        checkpoint="https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt",
         repo_dir="",
-        weights="",
         output="dense",
         layer=-1,
         return_multilayer=False,
@@ -25,43 +25,26 @@ class DINO(torch.nn.Module):
         mean_pool=False,
     ):
         super().__init__()
-        feat_dims = {
-            "vitb8": 768,
-            "vitb16": 768,
-            "vitb14": 768,
-            "vitb14_reg": 768,
-            "vitl14": 1024,
-            "vitg14": 1536,
-        }
-
+        
         # get model
-        self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
         self.repo_dir = repo_dir
-        self.weights = weights
-        self.dino_name = dino_name
-        self.model_name = model_name
-        if dino_name == "dinov3":
-            REPO_DIR = self.repo_dir
-            dino_vit = torch.hub.load(REPO_DIR, 'dinov3_vitb16', source='local',
-                               weights=self.weights)
-            self.checkpoint_name = 'dinov3_vitb16'
-        else:
-            self.checkpoint_name = f"{dino_name}_{model_name}"
-            dino_vit = torch.hub.load(f"facebookresearch/{dino_name}", self.checkpoint_name)
+        self.checkpoint_name = checkpoint
+        sys.path.append(self.repo_dir)
+        from vggt.models.vggt import VGGT
+        model = VGGT()
+        model.load_state_dict(torch.hub.load_state_dict_from_url(self.checkpoint_name))
+        self.vit = model.eval().to(torch.float32)
 
-        self.vit = dino_vit.eval().to(torch.float32)
-        self.has_registers = "_reg" in model_name
-
-        self.patch_size = self.vit.patch_embed.proj.kernel_size[0]
+        self.patch_size = self.vit.aggregator.patch_embed.patch_embed.proj.kernel_size[0]
         assert output in ["cls", "gap", "dense", "dense-cls"]
         self.output = output
 
-        feat_dim = feat_dims[model_name]
+        feat_dim = 1024
         feat_dim = feat_dim * 2 if output == "dense-cls" else feat_dim
 
-        num_layers = len(self.vit.blocks)
+        num_layers = len(self.vit.aggregator.patch_embed.blocks)
         multilayers = [
             num_layers // 4 - 1,
             num_layers // 2 - 1,
@@ -186,16 +169,10 @@ class DINO(torch.nn.Module):
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 
-        if self.dino_name == "dinov2":
-            x = self.vit.prepare_tokens_with_masks(images, None)
-        elif self.dino_name == "dinov3":
-            x = self.vit.prepare_tokens_with_masks(images, None)
-            x = x[0]
-        else:
-            x = self.vit.prepare_tokens(images)
+        x = self.vit.aggregator.patch_embed.prepare_tokens_with_masks(images, None)
 
         embeds = []
-        for i, blk in enumerate(self.vit.blocks):
+        for i, blk in enumerate(self.vit.aggregator.patch_embed.blocks):
             x = blk(x)
             if i in self.multilayers:
                 if self.add_norm:
@@ -225,7 +202,7 @@ class DINO(torch.nn.Module):
             return embeds[0][:, 1:].mean(dim=1)
         elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
             return embeds[0][:, 0]
-        elif len(outputs) == 1 and self.mean_pool and self.return_cls:
+        elif len(outputs) == 1 and self.mean_pool and self.return_cls:  
             return embeds[0].mean(dim=1)
         else:
             pass

@@ -20,11 +20,13 @@ class MAE(nn.Module):
         fixed_size=480,
         mode_selected="k",
         return_cls=False,
+        mean_pool=False,
     ):
         """Code based on transformer database"""
         super().__init__()
         self.arch = "vit"
         self.return_cls = return_cls
+        self.mean_pool = mean_pool
         assert output in ["cls", "gap", "dense"], "Options: [cls, gap, dense]"
         self.output = output
 
@@ -215,8 +217,14 @@ class MAE(nn.Module):
         outputs = []
         for idx, layer_i in enumerate(self.multilayers):
             x_i = encoder_outputs.hidden_states[layer_i]
-            if len(self.multilayers) == 1 and self.return_cls:
+            if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
+                return x_i[:, 1:].mean(dim=1)
+            elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
                 return x_i[:, 0]
+            elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
+                return x_i.mean(dim=1)
+            else:
+                pass
             if self.add_norm:
                 x_i_batchnorm = self.batchnorms[idx](x_i.permute(0, 2, 1)).permute(
                     0, 2, 1

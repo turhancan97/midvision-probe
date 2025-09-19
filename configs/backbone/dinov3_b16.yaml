@@ -1,0 +1,10 @@
+_target_: evals.models.dino.DINO
+repo_dir: /path/to/dinov3/repository
+weights: /path/to/dinov3/weights/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+dino_name: dinov3
+model_name: vitb16
+output: dense
+layer: -1
+add_norm: true
+return_cls: false
+mean_pool: false

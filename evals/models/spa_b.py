@@ -3,22 +3,28 @@ import torch.nn.functional as F
 import torch.nn as nn
 from torchvision.transforms import Resize
 from .utils import center_padding, tokens_to_output
-from evals.models.croco_models.croco import CroCoNet
+import sys
 from .util import load_checkpoint
 import torchvision
 
+
 checkpoints = {
     "vitb16": {
-        "url": "https://download.europe.naverlabs.com/ComputerVision/CroCo/CroCo.pth",  # Replace with actual URL
-        "filename": "CroCo.pth",
+        "url": "",
+        "filename": "spa-b.ckpt",
+    },
+    "vitl16": {
+        "url": "",
+        "filename": "spa-l.ckpt",
     }
 }
 
-
-class CROCO(nn.Module):
+class SPA(nn.Module):
     def __init__(
         self,
         model_name="vitb16",
+        repo_dir="",
+        pretrained=True,
         layer=-1,
         output="dense",
         return_multilayer=False,
@@ -34,12 +40,14 @@ class CROCO(nn.Module):
         self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
+        self.repo_dir = repo_dir
+        sys.path.append(self.repo_dir)
         # Load the model within __init__
-        self.model = self.load_model(model_name)
-        num_layers = len(self.model.enc_blocks)
+        self.model = self.load_model(model_name, pretrained)
+        num_layers = len(self.model.blocks)
         self.output = output
-        self.checkpoint_name = f"croco_{model_name}_{output}"
-        self.patch_size = 16  # CroCoNet typically uses a 16x16 patch size
+        self.checkpoint_name = f"spa_{model_name}_{output}"
+        self.patch_size = 16  # SPA typically uses a 16x16 patch size
         self.add_norm = add_norm
         self.return_kqv = return_kqv  # Store the flag to return K, Q, V
         self.fixed_size = fixed_size
@@ -69,14 +77,20 @@ class CROCO(nn.Module):
             [nn.BatchNorm1d(feat_dim) for _ in self.multilayers]
         )
 
-    def load_model(self, model_name: str):
-        """Load the CroCo model from checkpoint."""
+    def load_model(self, model_name: str, pretrained: bool):
+        """Load the SPA model from checkpoint."""
+        from spa.models import spa_vit_base_patch16, spa_vit_large_patch16
         assert model_name in checkpoints.keys(), f"Invalid model: {model_name}"
-        ckpt = load_checkpoint(**checkpoints[model_name])
-        model = CroCoNet(
-            **ckpt.get("croco_kwargs", {})
-        )  # Initialize CroCoNet with arguments
-        model.load_state_dict(ckpt["model"], strict=True)
+        if pretrained:
+            model = spa_vit_base_patch16(pretrained=True)
+        else:
+            model = spa_vit_base_patch16(pretrained=False)
+            ckpt = load_checkpoint(**checkpoints[model_name])
+            # remove "model." prefix
+            ckpt["state_dict"] = {k.replace("model.", ""): v for k, v in ckpt["state_dict"].items()}
+            # remove "img_backbone." prefix
+            ckpt["state_dict"] = {k.replace("img_backbone.", ""): v for k, v in ckpt["state_dict"].items()}
+            model.load_state_dict(ckpt["state_dict"], strict=False)
         return model.eval()
 
     def preprocess_image(self, rgb_image):
@@ -114,11 +128,11 @@ class CROCO(nn.Module):
         def hook_fn_forward_qkv(module, input, output):
             feat_out["qkv"] = output
 
-        self.model.enc_blocks[-1].attn.qkv.register_forward_hook(hook_fn_forward_qkv)
+        self.model.blocks[-1].attn.qkv.register_forward_hook(hook_fn_forward_qkv)
 
         with torch.no_grad():
             x, pos = self.model.patch_embed(images)
-            for blk in self.model.enc_blocks:
+            for blk in self.model.blocks:
                 x = blk(x, pos)
 
         qkv = (
@@ -157,19 +171,11 @@ class CROCO(nn.Module):
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 
-        x, pos = self.model.patch_embed(images)
-
-        if self.model.enc_pos_embed is not None:
-            x = x + self.model.enc_pos_embed[None, ...]
-
-        B, N, C = x.size()
-        masks = torch.zeros((B, N), dtype=bool)
-        posvis = pos
-        posvis = pos[~masks].view(B, -1, 2)
+        x = self.model.patch_embed(images)
 
         embeds = []
-        for i, blk in enumerate(self.model.enc_blocks):
-            x = blk(x, posvis)
+        for i, blk in enumerate(self.model.blocks):
+            x = blk(x)
             if i in self.multilayers:
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](

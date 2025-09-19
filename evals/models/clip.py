@@ -17,8 +17,12 @@ class CLIP(nn.Module):
         layer=-1,
         return_multilayer=False,
         add_norm=False,
+        return_cls=False,
+        mean_pool=False,
     ):
         super().__init__()
+        self.return_cls = return_cls
+        self.mean_pool = mean_pool
         assert output in ["dense-cls", "cls", "gap", "dense"]
         self.output = output
         self.checkpoint_name = "clip_" + arch.replace("-", "").lower() + checkpoint
@@ -52,15 +56,17 @@ class CLIP(nn.Module):
             self.feat_dim = feat_dims
             self.multilayers = multilayers
         else:
-            self.feat_dim = feat_dims
+            self.feat_dim = feat_dim
             layer = multilayers[-1] if layer == -1 else layer
             self.multilayers = [layer]
 
         self.layer = "-".join(str(_x) for _x in self.multilayers)
 
-        # Define BatchNorm1d layers for each multilayer
+        # Define BatchNorm1d layers for each selected layer
+        if output == "dense-cls":
+            feat_dim = feat_dim // 2
         self.batchnorms = nn.ModuleList(
-            [nn.BatchNorm1d(feat_dim) for feat_dim in self.feat_dim]
+            [nn.BatchNorm1d(feat_dim) for _ in self.multilayers]
         )
         self.add_norm = add_norm
 
@@ -86,16 +92,34 @@ class CLIP(nn.Module):
         for i, blk in enumerate(self.visual.transformer.resblocks):
             x = blk(x)
             if i in self.multilayers:
-                embeds.append(x)
+                if self.add_norm:
+                    x_batched = self.batchnorms[self.multilayers.index(i)](
+                        x.permute(0, 2, 1)
+                    ).permute(
+                        0, 2, 1
+                    )  # Exclude the class token
+                    embeds.append(x_batched)
+                else:
+                    embeds.append(x)
                 if len(embeds) == len(self.multilayers):
                     break
 
         outputs = []
-        for i, _x in enumerate(embeds):
-            # Apply BatchNorm1d for each output layer
-            if self.add_norm:
-                _x = self.batchnorms[i](_x[:, 1:])  # Exclude the class token
-            _x = tokens_to_output(self.output, _x[:, 1:], _x[:, 0], out_hw)
-            outputs.append(_x)
+        for i, x_i in enumerate(embeds):
+
+            cls_tok = x_i[:, 0]
+            # ignoring register tokens
+            spatial = x_i[:, 1:]
+            x_i = tokens_to_output(self.output, spatial, cls_tok, out_hw)
+            outputs.append(x_i)
+
+        if len(outputs) == 1 and self.mean_pool and not self.return_cls:
+            return embeds[0][:, 1:].mean(dim=1)
+        elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
+            return embeds[0][:, 0]
+        elif len(outputs) == 1 and self.mean_pool and self.return_cls:
+            return embeds[0].mean(dim=1)
+        else:
+            pass
 
         return outputs[0] if len(outputs) == 1 else outputs

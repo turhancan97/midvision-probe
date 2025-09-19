@@ -30,10 +30,12 @@ class CROCOV2(nn.Module):
         mode_selected="k",
         return_layers=None,
         return_cls=False,
+        mean_pool=False,
     ):
         super().__init__()
         self.arch = "vit"
         self.return_cls = return_cls
+        self.mean_pool = mean_pool
         # Load the model within __init__
         self.model = self.load_model(model_name)
         num_layers = len(self.model.enc_blocks)
@@ -185,7 +187,13 @@ class CROCOV2(nn.Module):
             tokens_to_output(self.output, embed, None, (h, w)) for embed in embeds
         ]
 
-        if len(outputs) == 1 and self.return_cls:
+        if len(outputs) == 1 and self.mean_pool and not self.return_cls:
+            return embeds[0][:, 1:].mean(dim=1)
+        elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
             return embeds[0][:, 0]
+        elif len(outputs) == 1 and self.mean_pool and self.return_cls:
+            return embeds[0].mean(dim=1)
+        else:
+            pass
 
         return outputs[0] if len(outputs) == 1 else outputs

@@ -39,6 +39,51 @@ def load_model(arch: str, global_pool=GLOBAL_POOL, **kwargs):
         delete_prefixes=["target_generator.", "neck.", "mask_token"],
     )
     model.load_state_dict(ckpt)
+    # ckpt = load_checkpoint(**checkpoints[arch])["model"]
+    # ckpt = prepare_state_dict(
+    #     ckpt,
+    #     remove_prefix=None,
+    #     delete_prefixes=["decoder_blocks.", "decoder_embed.", "mask_token", "decoder_pos_embed", "flow_proj.", "decoder_norm.", "decoder_pred."],
+    # )
+
+    # # Create a new state dict with renamed keys
+    # new_ckpt = {}
+    # key_mapping = {
+    #     # Base mappings
+    #     'patch_embed.proj': 'patch_embed.projection',
+    #     'blocks': 'layers',
+    #     'norm1': 'ln1',
+    #     'norm2': 'ln2',
+    #     'mlp': 'ffn',
+    #     'fc1': 'layers.0.0',
+    #     'fc2': 'layers.1',
+    #     'norm': 'ln1',  # Final norm layer
+    # }
+
+    # for k, v in ckpt.items():
+    #     new_key = k
+        
+    #     # Handle the base case first
+    #     if k in ['cls_token', 'pos_embed']:
+    #         new_key = k
+    #     else:
+    #         # Apply all mappings
+    #         for old_pattern, new_pattern in key_mapping.items():
+    #             new_key = new_key.replace(old_pattern, new_pattern)
+        
+    #     new_ckpt[new_key] = v
+
+    # # Load the renamed state dict
+    # try:
+    #     model.load_state_dict(new_ckpt)
+    # except Exception as e:
+    #     print("Failed to load state dict. Printing keys for debugging:")
+    #     print("\nCheckpoint keys:")
+    #     print(sorted(new_ckpt.keys()))
+    #     print("\nModel keys:")
+    #     print(sorted([name for name, _ in model.named_parameters()]))
+    #     raise e
+
     return model
 
 
@@ -55,10 +100,12 @@ class MASKFEAT(torch.nn.Module):
         fixed_size=480,
         mode_selected="k",
         return_cls=False,
+        mean_pool=False,
     ):
         super().__init__()
         self.arch = "vit"
         self.return_cls = return_cls
+        self.mean_pool = mean_pool
         self.model = load_model(arch, global_pool=global_pool)
 
         self.output = output
@@ -234,8 +281,14 @@ class MASKFEAT(torch.nn.Module):
         for i, blk in enumerate(self.model.layers):
             x = blk(x)
             if i in self.multilayers:
-                if len(self.multilayers) == 1 and self.return_cls:
+                if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
+                    return x[:, 1:].mean(dim=1)
+                elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
                     return x[:, 0]
+                elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
+                    return x.mean(dim=1)
+                else:
+                    pass
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
                         x.permute(0, 2, 1)
