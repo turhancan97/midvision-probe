@@ -152,3 +152,7 @@ principal_curvature_images
 objectness_output
 previous_results
 result
+
+*_exps
+pretrained_models
+logs
