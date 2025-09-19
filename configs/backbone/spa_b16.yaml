@@ -1,6 +1,6 @@
 _target_: evals.models.spa_b.SPA
 repo_dir: /path/to/SPA/repository
-pretrained: false
+pretrained: true
 output: dense
 layer: -1
 add_norm: true
