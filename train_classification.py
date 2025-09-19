@@ -160,7 +160,7 @@ def train_model(rank, world_size, cfg: DictConfig):
     if rank == 0 and cfg.wandb.use:
         sanitized_cfg = OmegaConf.to_container(cfg, resolve=True, enum_to_str=True)
         wandb.init(
-            project="ssl-linear-classification",
+            project="ssl-linear-probe-classification",
             config=sanitized_cfg,
             name=f"{cfg.experiment_name}_{cfg.experiment_model}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             group="seed: " + str(cfg.system.random_seed),
@@ -197,7 +197,7 @@ def train_model(rank, world_size, cfg: DictConfig):
 
     # ===== Logging setup =====
     if rank == 0:
-        exp_path = Path(__file__).parent / f"classification_exps/{datetime.now().strftime('%d%m%Y-%H%M')}"
+        exp_path = Path(__file__).parent / f"linear_probe_classification_exps/{datetime.now().strftime('%d%m%Y-%H%M')}"
         exp_path.mkdir(parents=True, exist_ok=True)
         logger.add(exp_path / "training.log")
         logger.info(f"Config: \n {OmegaConf.to_yaml(cfg)}")
@@ -288,9 +288,9 @@ def train_model(rank, world_size, cfg: DictConfig):
             f"{val_bal*100:.2f}",
         ]
 
-        result_dir = os.path.join(f"{cfg.output_dir}", "classification")
+        result_dir = os.path.join(f"{cfg.output_dir}", "linear_probe_classification")
         os.makedirs(result_dir, exist_ok=True)
-        csv_path = os.path.join(result_dir, "classification_results_imagenette_final.csv")
+        csv_path = os.path.join(result_dir, "linear_probe_classification_results_imagenette_final.csv")
         is_new = not os.path.exists(csv_path)
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
@@ -302,7 +302,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         destroy_process_group()
 
 
-@hydra.main(config_name="classification_training", config_path="./configs", version_base=None)
+@hydra.main(config_name="linear_probe_classification_training", config_path="./configs", version_base=None)
 def main(cfg: DictConfig):
     world_size = cfg.system.num_gpus
     if world_size > 1:
