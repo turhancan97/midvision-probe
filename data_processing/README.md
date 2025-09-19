@@ -83,3 +83,17 @@ rmdir surfacenormal_metadata
 cd ../../data_processing
 python create_nyu_pkl.py
 ```
+
+## Unreal Relative Position dataset
+
+We use a synthetic Unreal dataset where each rendered image has a matching JSON (e.g., `params_123.json`) containing the camera and actor positions. We classify the relative position of Target B with respect to Reference A (Front/Back/Left/Right; optionally Ambiguous). The dataset loader expects:
+
+- Images named like `img_XXXX.jpg` or `img_XXXX.jpeg` in a flat folder.
+- Matching JSON files named `params_XXXX.json` with the same index (leading zeros tolerated).
+- Each JSON includes:
+  - `camera.location` with `{x, y, ...}`
+  - `actors` dict, where each value has `location` fields.
+
+By default, we invert the X coordinate (to match provided script conventions) and compute the 2D angle between camera→reference and reference→target to derive labels. Ambiguous samples near diagonals can be excluded by setting `exclude_ambiguous=true`.
+
+Configuration example: `configs/dataset/unreal_position.yaml`.

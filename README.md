@@ -104,3 +104,62 @@ code and datasets:
 - [GeoNet](https://github.com/xjqi/GeoNet) for releasing the extracted surface normals for full NYU.  
 - [Probe3D](https://github.com/mbanani/probe3d) for releasing probing algorithms for 3D foundation models.
 - [Comparing evaluation protocols for self-supervised pre-training with image classification](https://github.com/XuweiyiChen/probing-mid-level-vision/tree/ssl-previous) for releasing a collection of Self-Supervised Learning methods and their usages.
+
+--------------------------------
+
+New additions:
+
+### Linear Classification (Imagenette)
+-----------
+- Train a linear probe on Imagenette using CLS token features from the backbone. Hydra configs like other tasks.
+
+```bash
+python train_classification.py backbone=dinov2_b14 experiment_model=classification_dinov2_b14
+```
+
+- Metrics logged: Top-1, Top-5, Balanced Accuracy (val). Results CSV saved under `result/classification/classification_results_imagenette_final.csv`.
+- W&B logging follows the same pattern as other experiments (enable via `wandb.use=True`).
+
+### Position Between Objects (Unreal)
+-----------
+- Train a linear probe to classify the relative position of Target B with respect to Reference A from the camera’s perspective. Classes: Front, Back, Left, Right (Ambiguous labels are excluded by default).
+
+```bash
+python train_position_between_objects.py backbone=dino_b16 experiment_model=position_between_objects_dino_b16
+```
+
+- Metrics logged: Top‑1, Top‑2, Balanced Accuracy (val). Results CSV saved under `result/position_between_objects/position_between_objects_results_unreal_final.csv`.
+- W&B logging follows the same pattern as other experiments.
+
+#### Important Notes:
+- You can run the `launch_script/launch_position_object.py` to launch the experiments for all the backbones sequentially.
+- Configure dataset root and options in `configs/dataset/unreal_position.yaml`
+- Configure probe options in `configs/probe/classifier.yaml`
+- Configure optimizer options in `configs/optimizer/twenty_epoch.yaml`
+- Configure experiment options in `configs/position_between_objects_training.yaml`
+- This evaluation is now only support following backbones in directory of `configs/backbone`
+  - `clip_b16_laion`
+  - `deit3_b16`
+  - `dino_b16`
+  - `dinov2_b14`
+  - `dinov2_b14_reg`
+  - `dinov3_b16`
+  - `croco_b16`
+  - `crocov2_b16`
+  - `mae_b16`
+  - `maskfeat_vitb16`
+  - `vggt_l16`
+  - `spa_b16`
+- If you want to sweep the hyperparameters to search for optimal hyperparameters, you can enable the sweep in `configs/position_between_objects_training.yaml`
+- return_cls means return the CLS token features from the backbone - [B, D]
+- mean_pool means mean of patch tokens from the backbone - [B, (H/P x W/P), D].mean(dim=1) == [B, D]
+- If both return_cls and mean_pool are True, it will take mean of all the tokens from the backbone - [B, 1 + (H/P x W/P), D].mean(dim=1) == [B, D]
+- If both return_cls and mean_pool are False, it will not return any features from the backbone and raise an error.
+
+### VGGT, SPA and DINOv3 Notes
+- You need to install the repositories of VGGT, SPA and DINOv3 to use these backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
+- Please refer to following links for installation:
+  - [VGGT](https://github.com/facebookresearch/vggt) - the weight are automatically downloaded from the huggingface repository.
+  - [SPA](https://github.com/HaoyiZhu/SPA) - the weight are automatically downloaded from the huggingface repository.
+  - [DINOv3](https://github.com/facebookresearch/dinov3) - you need to ask for permission to download the weight from the repository and define the location of the weights in the `configs/backbone` folder.
+- You also need to install the dependencies of those repositories.
