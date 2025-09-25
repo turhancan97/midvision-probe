@@ -31,6 +31,7 @@ class DINO(torch.nn.Module):
             "vitb14": 768,
             "vitb14_reg": 768,
             "vitl14": 1024,
+            "vitl14_reg": 1024,
             "vitg14": 1536,
         }
 
