@@ -525,6 +525,9 @@ def train_model(rank, world_size, cfg: DictConfig):
             "Top1 Val",
             "Top2 Val",
             "Balanced Acc Val",
+            "Top1 Test",
+            "Top2 Test",
+            "Balanced Acc Test",
         ]
 
         row = [
@@ -545,6 +548,9 @@ def train_model(rank, world_size, cfg: DictConfig):
             f"{val_top1*100:.2f}",
             f"{val_top2*100:.2f}",
             f"{val_bal*100:.2f}",
+            f"{test_top1*100:.2f}",
+            f"{test_top2*100:.2f}",
+            f"{test_bal*100:.2f}",
         ]
 
         result_dir = os.path.join(f"{cfg.output_dir}", "position_between_objects")
