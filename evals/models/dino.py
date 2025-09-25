@@ -189,14 +189,17 @@ class DINO(torch.nn.Module):
         if self.dino_name == "dinov2":
             x = self.vit.prepare_tokens_with_masks(images, None)
         elif self.dino_name == "dinov3":
-            x = self.vit.prepare_tokens_with_masks(images, None)
-            x = x[0]
+            x, (H, W) = self.vit.prepare_tokens_with_masks(images, None)
+            rope_sincos = self.vit.rope_embed(H=H, W=W)
         else:
             x = self.vit.prepare_tokens(images)
 
         embeds = []
         for i, blk in enumerate(self.vit.blocks):
-            x = blk(x)
+            if self.dino_name == "dinov3":
+                x = blk(x, rope_sincos)
+            else:
+                x = blk(x)
             if i in self.multilayers:
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
@@ -220,7 +223,9 @@ class DINO(torch.nn.Module):
             x_i = tokens_to_output(self.output, spatial, cls_tok, (h, w))
             outputs.append(x_i)
 
-        embeds = [embeds[0][:, (-1 * num_spatial) - 1:]]
+        embeds_patch = embeds[0][:, (-1 * num_spatial):]
+        embeds_cls = embeds[0][:, :1]
+        embeds = [torch.cat([embeds_cls, embeds_patch], dim=1)]   
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
             return embeds[0][:, 1:].mean(dim=1)
         elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
