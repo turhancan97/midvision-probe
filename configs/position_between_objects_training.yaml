@@ -18,9 +18,14 @@ experiment_model: clip_b16_laion
 is_eval: False
 ckpt_path: ""
 output_dir: "result"
+feature_cache_dir: "/path/to/feature_cache"
+visualization:
+  sample_number: 40
+  correctly_classified: false
 backbone:
   return_cls: false
-  mean_pool: true
+  mean_pool: false
+  efficient_probe: true
 probe:
   num_classes: 4
 dataset:
