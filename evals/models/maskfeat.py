@@ -101,13 +101,14 @@ class MASKFEAT(torch.nn.Module):
         mode_selected="k",
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         super().__init__()
         self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
         self.model = load_model(arch, global_pool=global_pool)
-
+        self.efficient_probe = efficient_probe
         self.output = output
         feat_dim = 768  # ViT-B/16 has a dimension of 768
         self.patch_size = self.model.patch_embed.projection.kernel_size[0]
@@ -281,31 +282,36 @@ class MASKFEAT(torch.nn.Module):
         for i, blk in enumerate(self.model.layers):
             x = blk(x)
             if i in self.multilayers:
-                if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
-                    return x[:, 1:].mean(dim=1)
-                elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
-                    return x[:, 0]
-                elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
-                    return x.mean(dim=1)
-                else:
-                    pass
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
                         x.permute(0, 2, 1)
                     ).permute(
                         0, 2, 1
-                    )  # Exclude the class token
-                    embeds.append(x_batched[:, 1:])
+                    )
+                    embeds.append(x_batched)
                 else:
-                    embeds.append(x[:, 1:])  # Ignore the class token
+                    embeds.append(x)
                 if len(embeds) == len(self.multilayers):
                     break
 
         outputs = []
         for x_i in embeds:
+            x_i = x_i[:, 1:]
             b, n, c = x_i.shape
             h = w = int(n**0.5)  # Assuming square spatial dimensions (e.g., 14x14)
             x_i = x_i.permute(0, 2, 1).contiguous().view(b, c, h, w)
             outputs.append(x_i)
+        
+        if self.efficient_probe:
+            return embeds[0]
+        
+        if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
+            return embeds[0][:, 1:].mean(dim=1)
+        elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
+            return embeds[0][:, 0]
+        elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
+            return embeds[0].mean(dim=1)
+        else:
+            pass
 
         return outputs[0] if len(outputs) == 1 else outputs

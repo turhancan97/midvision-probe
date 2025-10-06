@@ -16,6 +16,7 @@ class DeIT(torch.nn.Module):
         add_norm=False,
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         super().__init__()
 
@@ -61,6 +62,7 @@ class DeIT(torch.nn.Module):
             [nn.BatchNorm1d(feat_dim) for _ in self.multilayers]
         )
         self.add_norm = add_norm
+        self.efficient_probe = efficient_probe
 
     def forward(self, images):
         B, _, h, w = images.shape
@@ -120,6 +122,9 @@ class DeIT(torch.nn.Module):
             spatial = x_i[:, -1 * num_spatial :] #TODO: check if this is correct
             x_i = tokens_to_output(self.output, spatial, cls_tok, (h, w))
             outputs.append(x_i)
+
+        if self.efficient_probe:
+            return embeds[0]
 
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
             return embeds[0][:, 1:].mean(dim=1)

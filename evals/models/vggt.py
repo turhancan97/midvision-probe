@@ -23,6 +23,7 @@ class VGGT1B(torch.nn.Module):
         return_layers=None,
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         super().__init__()
         
@@ -74,6 +75,7 @@ class VGGT1B(torch.nn.Module):
         self.fixed_size = fixed_size
         self.resize_transform = Resize((fixed_size, fixed_size))
         self.mode_selected = mode_selected
+        self.efficient_probe = efficient_probe
 
     def extract_kqv(self, images):
         """Helper function to extract K, Q, V from the last attention layer"""
@@ -200,6 +202,8 @@ class VGGT1B(torch.nn.Module):
         embeds_patch = embeds[0][:, (-1 * num_spatial):]
         embeds_cls = embeds[0][:, :1]
         embeds = [torch.cat([embeds_cls, embeds_patch], dim=1)]
+        if self.efficient_probe:
+            return embeds[0]
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
             return embeds[0][:, 1:].mean(dim=1)
         elif len(outputs) == 1 and self.return_cls and not self.mean_pool:

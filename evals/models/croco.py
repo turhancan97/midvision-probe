@@ -29,6 +29,7 @@ class CROCO(nn.Module):
         return_layers=None,
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         super().__init__()
         self.arch = "vit"
@@ -45,6 +46,7 @@ class CROCO(nn.Module):
         self.fixed_size = fixed_size
         self.resize_transform = Resize((fixed_size, fixed_size))  # Resize for input
         self.mode_selected = mode_selected
+        self.efficient_probe = efficient_probe
 
         feat_dim = 768
         multilayers = [
@@ -184,6 +186,9 @@ class CROCO(nn.Module):
         outputs = [
             tokens_to_output(self.output, embed, None, (h, w)) for embed in embeds
         ]
+
+        if self.efficient_probe:
+            return embeds[0]
 
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
             return embeds[0][:, 1:].mean(dim=1)

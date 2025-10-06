@@ -21,6 +21,7 @@ class MAE(nn.Module):
         mode_selected="k",
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         """Code based on transformer database"""
         super().__init__()
@@ -29,7 +30,7 @@ class MAE(nn.Module):
         self.mean_pool = mean_pool
         assert output in ["cls", "gap", "dense"], "Options: [cls, gap, dense]"
         self.output = output
-
+        self.efficient_probe = efficient_probe
         self.checkpoint_name = "$mae$" + checkpoint.split("/")[1]
 
         self.vit = ViTMAEForPreTraining.from_pretrained(checkpoint).vit
@@ -215,20 +216,14 @@ class MAE(nn.Module):
         )
 
         outputs = []
+        embeds = []
         for idx, layer_i in enumerate(self.multilayers):
             x_i = encoder_outputs.hidden_states[layer_i]
-            if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
-                return x_i[:, 1:].mean(dim=1)
-            elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
-                return x_i[:, 0]
-            elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
-                return x_i.mean(dim=1)
-            else:
-                pass
             if self.add_norm:
                 x_i_batchnorm = self.batchnorms[idx](x_i.permute(0, 2, 1)).permute(
                     0, 2, 1
-                )  # Exclude the class token
+                )
+                embeds.append(x_i_batchnorm)
                 x_i_batchnorm = tokens_to_output(
                     self.output,
                     x_i_batchnorm[:, 1:],
@@ -237,9 +232,25 @@ class MAE(nn.Module):
                 )
                 outputs.append(x_i_batchnorm)
             else:
+                embeds.append(x_i)
                 x_i = tokens_to_output(
                     self.output, x_i[:, 1:], x_i[:, 0], (self.feat_h, self.feat_w)
                 )
                 outputs.append(x_i)
+            
+            if len(embeds) == len(self.multilayers):
+                break
+
+        if self.efficient_probe:
+            return embeds[0]
+        
+        if len(self.multilayers) == 1 and self.mean_pool and not self.return_cls:
+            return embeds[0][:, 1:].mean(dim=1)
+        elif len(self.multilayers) == 1 and self.return_cls and not self.mean_pool:
+            return embeds[0][:, 0]
+        elif len(self.multilayers) == 1 and self.mean_pool and self.return_cls:
+            return embeds[0].mean(dim=1)
+        else:
+            pass
 
         return outputs[0] if len(outputs) == 1 else outputs
