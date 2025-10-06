@@ -26,14 +26,16 @@ SOFTWARE.
 from __future__ import annotations
 
 import csv
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List, Any
 
 import hydra
 import matplotlib
+import numpy as np
 import torch
 import torch.multiprocessing as mp
 from hydra.utils import instantiate
@@ -45,6 +47,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
+import torch.nn as nn
+import cv2
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 
@@ -157,7 +161,7 @@ class FeatureCacheManager:
                 if isinstance(feats, (list, tuple)):
                     feats = torch.cat(feats, dim=-1)
                 if feats.dim() > 2:
-                    feats = feats.view(feats.size(0), -1)
+                    feats = feats.contiguous().view(feats.size(0), -1)
                 features.append(feats.cpu())
                 labels.append(batch["label"].cpu())
         features = torch.cat(features, dim=0)
@@ -299,6 +303,30 @@ def evaluate(head, loader, rank, num_classes):
     )
 
 
+def resolve_mean_std(dataset_cfg: DictConfig) -> Tuple[torch.Tensor, torch.Tensor]:
+    image_mean = dataset_cfg.get('image_mean', 'imagenet')
+    if isinstance(image_mean, (list, tuple)):
+        mean = [float(m) for m in image_mean]
+    elif image_mean == 'imagenet':
+        mean = [0.485, 0.456, 0.406]
+    elif image_mean == 'clip':
+        mean = [0.48145466, 0.4578275, 0.40821073]
+    else:
+        mean = [0.0, 0.0, 0.0]
+
+    image_std = dataset_cfg.get('image_std', None)
+    if isinstance(image_std, (list, tuple)):
+        std = [float(s) for s in image_std]
+    elif image_mean == 'imagenet':
+        std = [0.229, 0.224, 0.225]
+    elif image_mean == 'clip':
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        std = [1.0, 1.0, 1.0]
+
+    return torch.tensor(mean), torch.tensor(std)
+
+
 def plot_metrics(history, output_dir: Path, prefix: str, model_name: str):
     epochs = [h["epoch"] for h in history]
     train_loss = [h["train_loss"] for h in history]
@@ -382,6 +410,96 @@ def save_confusion_matrix(head, loader, rank, class_order, class_names, output_p
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
 
+
+
+def save_prediction_samples(
+    head,
+    backbone,
+    feature_loader: DataLoader,
+    dataset,
+    rank: int,
+    idx_to_label: Dict[int, str],
+    output_path: Path,
+    requested_images: int,
+    mean: torch.Tensor,
+    std: torch.Tensor,
+    select_correct: bool,
+):
+    head.eval()
+    device = torch.device(f"cuda:{rank}") if torch.cuda.is_available() else torch.device("cpu")
+    if requested_images <= 0:
+        return
+    rounded = int(math.ceil(max(1, requested_images) / 5)) * 5
+    cols = 5
+    matches: List[Tuple[int, int, int, Any]] = []
+    offset = 0
+    with torch.no_grad():
+        for feats, labels in feature_loader:
+            feats = feats.to(device, non_blocking=True)
+            logits = head(feats)
+            preds = logits.argmax(dim=1).cpu()
+            if hasattr(head, 'attention_map') and head.attention_map is not None:
+                attention_map = head.attention_map.cpu()
+            else:
+                attention_map = None
+            labels_cpu = labels.cpu()
+            batch_size = labels_cpu.size(0)
+            for i in range(batch_size):
+                pred_i = int(preds[i].item())
+                label_i = int(labels_cpu[i].item())
+                cond = (pred_i == label_i) if select_correct else (pred_i != label_i)
+                if cond:
+                    matches.append((offset + i, pred_i, label_i, attention_map[i] if attention_map is not None else None))
+                    if len(matches) >= rounded:
+                        break
+            offset += batch_size
+            if len(matches) >= rounded:
+                break
+    if not matches:
+        return
+    display_count = min(len(matches), rounded)
+    rows = max(1, math.ceil(display_count / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 3, rows * 3))
+    if isinstance(axes, np.ndarray):
+        axes_iter = axes.reshape(-1)
+    else:
+        axes_iter = [axes]
+    mean = mean.view(3, 1, 1)
+    std = std.view(3, 1, 1)
+    title_color = 'green' if select_correct else 'red'
+    for ax_idx, ax in enumerate(axes_iter):
+        if ax_idx >= display_count:
+            ax.axis('off')
+            continue
+        sample_idx, pred_idx, label_idx, attention_map = matches[ax_idx]
+        sample = dataset[sample_idx]
+        image = sample['image'].clone().detach().cpu()
+        image = (image * std + mean).clamp(0.0, 1.0)
+        image = image.permute(1, 2, 0).numpy()
+        ax.axis('off')
+        gt_name = idx_to_label.get(label_idx, str(label_idx))
+        pred_name = idx_to_label.get(pred_idx, str(pred_idx))
+        ax.set_title(f"GT: {gt_name}\nPred: {pred_name}", fontsize=10, color=title_color)
+        if attention_map is not None:
+            colors = [0, 0, 1]
+            alpha = 0.5
+            attention_map = attention_map[:, 1:] # remove cls token
+            attention_map = attention_map.reshape(head.num_queries, image.shape[0] // backbone.patch_size, image.shape[1] // backbone.patch_size)
+            attention_map = attention_map.mean(dim=0)
+            attention_map = attention_map.unsqueeze(0).unsqueeze(0)
+            attention_map = nn.functional.interpolate(attention_map, scale_factor=(backbone.patch_size, backbone.patch_size), mode='nearest')[0].permute(1, 2, 0).numpy()
+            attention_map = cv2.blur(attention_map, (8, 8))
+            # formalize to 0-1
+            attention_map = (attention_map - attention_map.min()) / (attention_map.max() - attention_map.min())
+            for c in range(3):
+                image[:, :, c] = image[:, :, c] * (1 - alpha * attention_map) + alpha * attention_map * colors[c]
+            ax.imshow(image, aspect='auto')
+        else:
+            ax.imshow(image)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 def run_trial_features(
     rank: int,
@@ -714,6 +832,33 @@ def train_model(rank, world_size, cfg: DictConfig):
         class_names = ["Left", "Right", "Front", "Back"]
         cm_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_confusion_{cfg.experiment_model}.png"
         save_confusion_matrix(head, test_loader, rank, class_order, class_names, cm_path)
+
+        sample_target = 20
+        select_correct = False
+        if hasattr(cfg, 'visualization') and cfg.visualization is not None:
+            if 'sample_number' in cfg.visualization:
+                sample_target = int(cfg.visualization.sample_number)
+            if 'correctly_classified' in cfg.visualization:
+                select_correct = bool(cfg.visualization.correctly_classified)
+        if sample_target > 0:
+            raw_test_dataset = instantiate(cfg.dataset, split='test', seed=cfg.system.random_seed)
+            mean, std = resolve_mean_std(cfg.dataset)
+            idx_to_label = {v: k for k, v in LABEL_TO_INDEX.items()}
+            suffix = 'correct' if select_correct else 'misclassified'
+            samples_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_{suffix}_{cfg.experiment_model}.png"
+            save_prediction_samples(
+                head,
+                backbone,
+                test_loader,
+                raw_test_dataset,
+                rank,
+                idx_to_label,
+                samples_path,
+                sample_target,
+                mean,
+                std,
+                select_correct,
+            )
 
         csv_path = result_dir / "position_between_objects_results_unreal_final.csv"
         is_new = not csv_path.exists()
