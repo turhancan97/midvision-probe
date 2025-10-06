@@ -4,4 +4,6 @@ checkpoint: "laion2b_s34b_b88k"
 output: dense
 layer: -1
 add_norm: true
+return_cls: false
 mean_pool: false
+efficient_probe: false
