@@ -35,6 +35,7 @@ class SPA(nn.Module):
         return_layers=None,
         return_cls=False,
         mean_pool=False,
+        efficient_probe=False,
     ):
         super().__init__()
         self.arch = "vit"
@@ -53,8 +54,9 @@ class SPA(nn.Module):
         self.fixed_size = fixed_size
         self.resize_transform = Resize((fixed_size, fixed_size))  # Resize for input
         self.mode_selected = mode_selected
+        self.efficient_probe = efficient_probe
 
-        feat_dim = 768
+        feat_dim = 768 if model_name == "vitb16" else 1024
         multilayers = [
             num_layers // 4 - 1,
             num_layers // 2 - 1,
@@ -82,9 +84,15 @@ class SPA(nn.Module):
         from spa.models import spa_vit_base_patch16, spa_vit_large_patch16
         assert model_name in checkpoints.keys(), f"Invalid model: {model_name}"
         if pretrained:
-            model = spa_vit_base_patch16(pretrained=True)
+            if model_name == "vitb16":
+                model = spa_vit_base_patch16(pretrained=True)
+            else:
+                model = spa_vit_large_patch16(pretrained=True)
         else:
-            model = spa_vit_base_patch16(pretrained=False)
+            if model_name == "vitb16":
+                model = spa_vit_base_patch16(pretrained=False)
+            else:
+                model = spa_vit_large_patch16(pretrained=False)
             ckpt = load_checkpoint(**checkpoints[model_name])
             # remove "model." prefix
             ckpt["state_dict"] = {k.replace("model.", ""): v for k, v in ckpt["state_dict"].items()}
@@ -172,6 +180,11 @@ class SPA(nn.Module):
         h, w = h // self.patch_size, w // self.patch_size
 
         x = self.model.patch_embed(images)
+        pos_embed_patch = self.model.pos_embed[:, 1:, :]
+        x = x + pos_embed_patch
+
+        cls_token = self.model.cls_token + pos_embed_patch[:, :1, :]
+        x = torch.cat((cls_token.expand(x.shape[0], -1, -1), x), dim=1)
 
         embeds = []
         for i, blk in enumerate(self.model.blocks):
@@ -188,8 +201,11 @@ class SPA(nn.Module):
                     break
 
         outputs = [
-            tokens_to_output(self.output, embed, None, (h, w)) for embed in embeds
+            tokens_to_output(self.output, embed[:, 1:], embed[:, 0], (h, w)) for embed in embeds
         ]
+
+        if self.efficient_probe:
+            return embeds[0]
 
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
             return embeds[0][:, 1:].mean(dim=1)
