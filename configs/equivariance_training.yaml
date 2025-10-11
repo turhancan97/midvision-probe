@@ -1,0 +1,38 @@
+system:
+  random_seed: 8
+  num_gpus: 1
+  port: 12407
+note: ""
+batch_size: 128
+wandb:
+  use: false
+  eval_images: false
+defaults:
+  - optimizer: twenty_epoch
+  - backbone: clip_b16_laion
+  - dataset: unreal_equivariance
+  - probe: regressor
+  - _self_
+experiment_name: example_scenario
+experiment_model: clip_b16_laion
+regression_type: circle  # choices: [circle, line]
+levels: ["level-0", "level-1", "level-2", "level-3"]
+is_eval: false
+ckpt_path: ""
+output_dir: "result"
+training:
+  min_samples_per_object: 10
+  eval_every_epochs: 1
+visualization:
+  enable: true
+backbone:
+  return_cls: false
+  mean_pool: true
+  efficient_probe: false
+probe:
+  dropout_rate: 0.00
+dataset:
+  split: train
+  levels: ${levels}
+sweep:
+  enable: false

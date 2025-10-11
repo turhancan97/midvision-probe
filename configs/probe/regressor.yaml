@@ -1,0 +1,4 @@
+_target_: evals.models.probes.RegressionHead # ABMILPHead # EfficientProbing # RegressionHead
+output_dim: 2
+use_layernorm: true
+dropout_rate: 0.00

@@ -460,6 +460,42 @@ class MultiscaleHead(nn.Module):
         feats = interpolate(feats, scale_factor=4, mode="bilinear")
         return self.conv_out(feats)
 
+class RegressionHead(nn.Module):
+    def __init__(self,
+                 feat_dim: int,
+                 output_dim: int,
+                 use_layernorm: bool = True,
+                 dropout_rate: float = 0.0,
+                 attention_map = None,
+                 head_type: str = "linear"):
+        super().__init__()
+        self.name = f"reg_{head_type}"
+        self.attention_map = attention_map
+        self.dropout_rate = dropout_rate
+        self.use_layernorm = use_layernorm
+        self.norm = nn.LayerNorm(feat_dim) if use_layernorm else None
+        self.dropout_norm = nn.Dropout(dropout_rate)
+        self.layer = nn.Linear(feat_dim, feat_dim)
+        self.relu = nn.ReLU()
+        self.norm_reg = nn.LayerNorm(feat_dim)
+        self.regressor = nn.Linear(feat_dim, output_dim)
+
+    def forward(self, feats):
+        # feats is expected to be [B, D] (e.g., CLS token)
+        if isinstance(feats, (list, tuple)):
+            # If provided as a list of tensors, concatenate along feature dim
+            feats = torch.cat(feats, dim=-1)
+        if feats.dim() > 2:
+            feats = feats.view(feats.size(0), -1)
+        if self.norm is not None:
+            feats = self.norm(feats)
+        feats = self.dropout_norm(feats)
+        feats = self.layer(feats)
+        feats = self.relu(feats)
+        feats = self.norm_reg(feats)
+        pred = self.regressor(feats)
+        return pred
+
 
 class ClassificationHead(nn.Module):
     def __init__(self,

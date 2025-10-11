@@ -131,6 +131,17 @@ python train_position_between_objects.py backbone=dino_b16 experiment_model=posi
 - Metrics logged: Top‑1, Top‑2, Balanced Accuracy (val). Results CSV saved under `result/position_between_objects/position_between_objects_results_unreal_final.csv`.
 - W&B logging follows the same pattern as other experiments.
 
+### Equivariance (Unreal)
+
+- Train a linear probe to regress the position of the camera.
+
+```bash
+python train_equivariance.py backbone=dino_b16 experiment_model=equivariance_dino_b16
+```
+
+- Metrics logged: RMSE, MSE, MAE. Results CSV saved under `result/equivariance`.
+- W&B logging follows the same pattern as other experiments.
+
 #### Important Notes:
 - You can run the `launch_script/launch_position_object.py` to launch the experiments for all the backbones sequentially.
 - Configure dataset root and options in `configs/dataset/unreal_position.yaml`
