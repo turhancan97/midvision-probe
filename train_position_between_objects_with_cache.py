@@ -52,6 +52,7 @@ import cv2
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 
+from evals.analysis.perspective_divergence import run_perspective_divergence_analysis
 from evals.utils.optim import cosine_decay_linear_warmup
 from evals.utils.seed import set_random_seed
 from evals.datasets.unreal_position import LABEL_TO_INDEX
@@ -122,6 +123,18 @@ class FeatureCacheManager:
         self.cache_dir = base_dir / dataset_name
         for part in tail_parts:
             self.cache_dir = self.cache_dir / part
+        perspective = str(getattr(cfg.dataset, "perspective", "camera")).lower()
+        self.cache_dir = self.cache_dir / perspective
+        if cfg.backbone.efficient_probe:
+            self.cache_dir = self.cache_dir / "attentive"
+        elif cfg.backbone.return_cls and not cfg.backbone.mean_pool:
+            self.cache_dir = self.cache_dir / "cls"
+        elif cfg.backbone.mean_pool and not cfg.backbone.return_cls:
+            self.cache_dir = self.cache_dir / "mean_pool"
+        elif cfg.backbone.return_cls and cfg.backbone.mean_pool:
+            self.cache_dir = self.cache_dir / "cls_mean_pool"
+        else:
+            raise ValueError(f"Unsupported backbone type: {type(cfg.backbone)}")
         self.cache_dir = self.cache_dir / model_identifier
         if getattr(cfg.dataset, "exclude_ambiguous", None) is not None:
             flag = "no_amb" if cfg.dataset.exclude_ambiguous else "with_amb"
@@ -482,20 +495,35 @@ def save_prediction_samples(
         ax.set_title(f"GT: {gt_name}\nPred: {pred_name}", fontsize=10, color=title_color)
         if attention_map is not None:
             colors = [0, 0, 1]
-            alpha = 0.5
-            attention_map = attention_map[:, 1:] # remove cls token
-            attention_map = attention_map.reshape(head.num_queries, image.shape[0] // backbone.patch_size, image.shape[1] // backbone.patch_size)
+            alpha = 0.25  # Adjust transparency
+            heatmap = True
+            # Remove cls token and reshape attention map
+            try:
+                attention_map = attention_map.reshape(head.num_queries, image.shape[0] // backbone.patch_size, image.shape[1] // backbone.patch_size)
+            except:
+                attention_map = attention_map[:, 1:] # remove cls token
+                attention_map = attention_map.reshape(head.num_queries, image.shape[0] // backbone.patch_size, image.shape[1] // backbone.patch_size)
             attention_map = attention_map.mean(dim=0)
             attention_map = attention_map.unsqueeze(0).unsqueeze(0)
             attention_map = nn.functional.interpolate(attention_map, scale_factor=(backbone.patch_size, backbone.patch_size), mode='nearest')[0].permute(1, 2, 0).numpy()
             attention_map = cv2.blur(attention_map, (8, 8))
-            # formalize to 0-1
-            attention_map = (attention_map - attention_map.min()) / (attention_map.max() - attention_map.min())
-            for c in range(3):
-                image[:, :, c] = image[:, :, c] * (1 - alpha * attention_map) + alpha * attention_map * colors[c]
-            ax.imshow(image, aspect='auto')
+            # Normalize to 0-1
+            attention_map = (attention_map - attention_map.min()) / (attention_map.max() - attention_map.min() + 1e-8)
+            if heatmap:
+                # Create heatmap overlay
+                # Use matplotlib's colormap to create heatmap colors
+                heatmap_colors = plt.get_cmap('jet')(attention_map)  # Use jet colormap (red to purple)
+                heatmap_colors = heatmap_colors[:, :, :3]  # Remove alpha channel
+                
+                # Blend original image with heatmap
+                blended_image = (1 - alpha) * image + alpha * heatmap_colors
+            else:
+                for c in range(3):
+                    image[:, :, c] = image[:, :, c] * (1 - alpha * attention_map) + alpha * attention_map * colors[c]
+                blended_image = image
+            ax.imshow(blended_image, aspect='auto')
         else:
-            ax.imshow(image)
+            ax.imshow(image, aspect='auto')
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
@@ -747,6 +775,13 @@ def train_model(rank, world_size, cfg: DictConfig):
     train_split = cache_manager.get_split("train", cfg.batch_size)
     val_split = cache_manager.get_split("valid", cfg.batch_size)
     test_split = cache_manager.get_split("test", cfg.batch_size)
+    # # drop the whole sample which label is 0
+    # train_split.features = train_split.features[train_split.labels != 0]
+    # train_split.labels = train_split.labels[train_split.labels != 0]
+    # val_split.features = val_split.features[val_split.labels != 0]
+    # val_split.labels = val_split.labels[val_split.labels != 0]
+    # test_split.features = test_split.features[test_split.labels != 0]
+    # test_split.labels = test_split.labels[test_split.labels != 0]
 
     if getattr(cfg, "sweep", {}).get("enable", False):
         if world_size > 1 and rank != 0:
@@ -770,6 +805,15 @@ def train_model(rank, world_size, cfg: DictConfig):
     train_loader = build_feature_loader("train", train_split, cfg.batch_size, world_size)
     val_loader = build_feature_loader("valid", val_split, cfg.batch_size, world_size=1)
     test_loader = build_feature_loader("test", test_split, cfg.batch_size, world_size=1)
+    # print train, val, test dataset sizes
+    print(f"Train dataset size: {len(train_loader.dataset)}")
+    print(f"Val dataset size: {len(val_loader.dataset)}")
+    print(f"Test dataset size: {len(test_loader.dataset)}")
+    # print class counts for train, val, test with mapping
+    label_mapping = {v: k for k, v in LABEL_TO_INDEX.items()}
+    print(f"Train class counts: {train_split.labels.bincount().tolist()}, {label_mapping}")
+    print(f"Val class counts: {val_split.labels.bincount().tolist()}, {label_mapping}")
+    print(f"Test class counts: {test_split.labels.bincount().tolist()}, {label_mapping}")
 
     steps_per_epoch = max(1, len(train_loader))
     total_steps = cfg.optimizer.n_epochs * steps_per_epoch
@@ -820,7 +864,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         result_dir = Path(cfg.output_dir) / "position_between_objects"
         result_dir.mkdir(parents=True, exist_ok=True)
 
-        plot_dir = result_dir / "plots"
+        plot_dir = result_dir / "plots" / f"{cfg.dataset.perspective}" / f"{cfg.environment}" / f"{cfg.probe._target_.split('.')[-1]}" / f"{cfg.experiment_model}_{timestamp}"
         plot_metrics(history, plot_dir, prefix=f"{cfg.experiment_name}_{timestamp}", model_name=cfg.experiment_model)
 
         class_order = [
@@ -833,6 +877,8 @@ def train_model(rank, world_size, cfg: DictConfig):
         cm_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_confusion_{cfg.experiment_model}.png"
         save_confusion_matrix(head, test_loader, rank, class_order, class_names, cm_path)
 
+        raw_test_dataset = instantiate(cfg.dataset, split='test', seed=cfg.system.random_seed)
+
         sample_target = 20
         select_correct = False
         if hasattr(cfg, 'visualization') and cfg.visualization is not None:
@@ -841,7 +887,6 @@ def train_model(rank, world_size, cfg: DictConfig):
             if 'correctly_classified' in cfg.visualization:
                 select_correct = bool(cfg.visualization.correctly_classified)
         if sample_target > 0:
-            raw_test_dataset = instantiate(cfg.dataset, split='test', seed=cfg.system.random_seed)
             mean, std = resolve_mean_std(cfg.dataset)
             idx_to_label = {v: k for k, v in LABEL_TO_INDEX.items()}
             suffix = 'correct' if select_correct else 'misclassified'
@@ -860,6 +905,26 @@ def train_model(rank, world_size, cfg: DictConfig):
                 select_correct,
             )
 
+        angle_bin_size = float(getattr(cfg.visualization, "angle_bin_size_deg", 15.0))
+        min_bin_count = int(getattr(cfg.visualization, "min_samples_per_angle_bin", 20))
+        class_focus = str(getattr(cfg.visualization, "class_focus", "all"))
+        radar_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_radar_{cfg.experiment_model}.png"
+        table_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_bins_{cfg.experiment_model}.csv"
+        grid_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_examples_{cfg.experiment_model}.png"
+        raw_val_dataset = instantiate(cfg.dataset, split='valid', seed=cfg.system.random_seed)
+        run_perspective_divergence_analysis(
+            head,
+            val_loader,
+            raw_val_dataset,
+            device,
+            radar_path,
+            table_path,
+            grid_path,
+            angle_bin_size,
+            min_bin_count,
+            class_focus=class_focus,
+        )
+
         csv_path = result_dir / "position_between_objects_results_unreal_final.csv"
         is_new = not csv_path.exists()
         model_name = backbone.checkpoint_name
@@ -873,6 +938,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         headers = [
             "Timestamp",
             "Model Checkpoint",
+            "Environment",
             "Patch Size",
             "Layer",
             "Output",
@@ -883,6 +949,7 @@ def train_model(rank, world_size, cfg: DictConfig):
             "Probe LR",
             "Model LR",
             "Batch Size",
+            "Dropout Rate",
             "Train Dataset",
             "Val Dataset",
             "Top1 Val",
@@ -891,6 +958,7 @@ def train_model(rank, world_size, cfg: DictConfig):
             "Top1 Test",
             "Top2 Test",
             "Balanced Acc Test",
+            "Perspective"
         ]
 
         probe_name = head.module.name if isinstance(head, DDP) else head.name
@@ -900,6 +968,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         row = [
             timestamp,
             model_name,
+            cfg.environment,
             patch_size,
             str(layer),
             output,
@@ -910,6 +979,7 @@ def train_model(rank, world_size, cfg: DictConfig):
             cfg.optimizer.probe_lr,
             0.0,
             cfg.batch_size,
+            cfg.probe.dropout_rate,
             train_dataset_name,
             val_dataset_name,
             f"{val_top1*100:.2f}",
@@ -918,6 +988,7 @@ def train_model(rank, world_size, cfg: DictConfig):
             f"{test_top1*100:.2f}",
             f"{test_top2*100:.2f}",
             f"{test_bal*100:.2f}",
+            cfg.dataset.perspective,
         ]
 
         with open(csv_path, "a", newline="") as f:
@@ -925,6 +996,25 @@ def train_model(rank, world_size, cfg: DictConfig):
             if is_new:
                 writer.writerow(headers)
             writer.writerow(row)
+
+        if getattr(cfg, "save_head", False):
+            head_to_save = head.module if isinstance(head, DDP) else head
+            name_parts = [
+                "head",
+                cfg.experiment_model,
+                # backbone.checkpoint_name,
+                getattr(head_to_save, "name", "probe"),
+                cfg.environment,
+                getattr(cfg.dataset, "perspective", "perspective"),
+                getattr(cfg.dataset, "reference_label", "ref"),
+                getattr(cfg.dataset, "target_label", "tgt"),
+            ]
+            safe_parts = [str(part).replace(" ", "-") for part in name_parts if part]
+            print(safe_parts)
+            head_path = result_dir / f"{'_'.join(safe_parts)}.pt"
+            print(head_path)
+            torch.save(head_to_save.state_dict(), head_path)
+            logger.info(f"Saved head weights to {head_path}")
 
     if world_size > 1:
         destroy_process_group()
