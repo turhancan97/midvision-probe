@@ -83,7 +83,7 @@ def balanced_accuracy(logits: torch.Tensor, targets: torch.Tensor, num_classes: 
         return float(sum(recalls) / len(recalls))
 
 
-def train_one_epoch(model, head, loader, optimizer, loss_fn, rank, detach_backbone=True):
+def train_one_epoch(model, head, loader, optimizer, loss_fn, rank, scheduler, detach_backbone=True):
     model.eval()  # backbone frozen
     head.train()
     running_loss = 0.0
@@ -102,8 +102,8 @@ def train_one_epoch(model, head, loader, optimizer, loss_fn, rank, detach_backbo
         logits = head(feats)
         loss = loss_fn(logits, labels)
         loss.backward()
+        scheduler.step()
         optimizer.step()
-
         top1, top5 = topk_accuracies(logits, labels, ks=(1, 5))
         running_loss += loss.item() * images.size(0)
         running_top1 += top1 * images.size(0)
@@ -162,7 +162,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         wandb.init(
             project="ssl-linear-probe-classification",
             config=sanitized_cfg,
-            name=f"{cfg.experiment_name}_{cfg.experiment_model}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            name=f"{cfg.experiment_name}_{cfg.dataset.name}_{cfg.experiment_model}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             group="seed: " + str(cfg.system.random_seed),
         )
 
@@ -188,7 +188,7 @@ def train_model(rank, world_size, cfg: DictConfig):
         head = DDP(head, device_ids=[rank])
 
     # ===== Optimizer/Scheduler =====
-    optimizer = torch.optim.AdamW([{ "params": head.parameters(), "lr": cfg.optimizer.probe_lr }])
+    optimizer = torch.optim.AdamW([{ "params": head.parameters(), "lr": cfg.optimizer.probe_lr, "weight_decay": cfg.optimizer.weight_decay }])
     total_steps = cfg.optimizer.n_epochs * max(1, len(train_loader))
     warmup_steps = int(cfg.optimizer.warmup_epochs * max(1, len(train_loader)))
     lr_lambda = lambda step: cosine_decay_linear_warmup(step, total_steps, max(1, warmup_steps))
@@ -208,9 +208,8 @@ def train_model(rank, world_size, cfg: DictConfig):
             train_loader.sampler.set_epoch(epoch)
 
         train_loss, train_top1, train_top5 = train_one_epoch(
-            model, head, train_loader, optimizer, loss_fn, rank, detach_backbone=True
+            model, head, train_loader, optimizer, loss_fn, rank, scheduler,detach_backbone=True
         )
-        scheduler.step()
 
         val_loss, val_top1, val_top5, val_bal = evaluate(
             model, head, val_loader, rank, getattr(cfg.probe, "num_classes", 10)
