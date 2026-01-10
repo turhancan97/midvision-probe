@@ -1,31 +1,36 @@
 system:
-  random_seed: 8
+  random_seed: 8 # 8, 42
   num_gpus: 1
   port: 12367
 note: ""
-batch_size: 64
+batch_size: 256
 wandb:
   use: False
   eval_images: False
 defaults:
-  - optimizer: twenty_epoch
+  - optimizer: custom_epoch
   - backbone: clip_b16_laion
   - dataset: unreal_position
   - probe: classifier
   - _self_
 experiment_name: SSL_Position_Between_Objects
 experiment_model: clip_b16_laion
+environment: forest # forest, desert, winter_town
 is_eval: False
 ckpt_path: ""
 output_dir: "result"
 feature_cache_dir: "/path/to/feature_cache"
+save_head: false
 visualization:
   sample_number: 40
-  correctly_classified: false
+  correctly_classified: true
+  angle_bin_size_deg: 20
+  min_samples_per_angle_bin: 20
+  class_focus: all # options: all, lateral (left/right), sagittal (front/back)
 backbone:
   return_cls: false
-  mean_pool: false
-  efficient_probe: true
+  mean_pool: true
+  efficient_probe: false
 probe:
   num_classes: 4
 dataset:
