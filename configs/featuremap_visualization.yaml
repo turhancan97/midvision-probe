@@ -1,0 +1,29 @@
+# Feature Map Visualization Configuration
+# Usage: python scripts/visualize_featuremap.py
+
+# List of backbone configs to visualize (from configs/backbone/)
+backbones:
+  - spa_b16
+  - croco_b16
+  - crocov2_b16
+  - dinov2_b14
+
+# Input settings
+image_folder: "images/"  # Required: path to folder containing images
+
+# Image preprocessing
+preprocessing:
+  img_size: 224  # Resolution to resize images before processing
+  # Normalization: "imagenet", "clip", or list of 3 floats
+  image_mean: imagenet
+  image_std: imagenet
+
+# PCA visualization parameters
+pca:
+  outlier_threshold: 2.0  # Controls how many std dev outside for outliers (m parameter)
+  remove_first_component: false  # Whether to remove first PCA component (background)
+  interpolation_size: 224  # Size to interpolate feature maps before PCA
+
+# Output settings
+output_dir: "visualize"  # Base output directory (will create timestamped subfolder)
+
