@@ -29,7 +29,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -42,7 +42,7 @@ INDEX_TO_LABEL = {v: k for k, v in LABEL_TO_INDEX.items()}
 
 
 def classify_relative_direction(
-    cam_xy: np.ndarray,
+    observer_xy: np.ndarray,
     ref_xy: np.ndarray,
     tgt_xy: np.ndarray,
     amb_deg: int = 20,
@@ -50,7 +50,7 @@ def classify_relative_direction(
     back_deg: int = 135,
 ) -> str:
     # Vectors
-    fwd = ref_xy - cam_xy  # camera -> reference
+    fwd = ref_xy - observer_xy  # observer -> reference
     rel = tgt_xy - ref_xy  # reference -> target
 
     nf = np.linalg.norm(fwd)
@@ -103,8 +103,11 @@ def _matching_json_for_image(image_path: Path) -> Optional[Path]:
 
 
 def _load_positions(
-    json_path: Path, reference_label: str, target_label: str
-) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    json_path: Path,
+    reference_label: str,
+    target_label: str,
+    human_label: Optional[str] = None,
+) -> Optional[Dict[str, Optional[np.ndarray]]]:
     try:
         with open(json_path, "r") as f:
             metadata = json.load(f)
@@ -123,7 +126,12 @@ def _load_positions(
             [-1 * positions[target_label]["x"], positions[target_label]["y"]],
             dtype=float,
         )
-        return cam, ref, tgt
+        human = None
+        if human_label:
+            actor_loc = positions.get(human_label)
+            if actor_loc is not None:
+                human = np.array([-1 * actor_loc["x"], actor_loc["y"]], dtype=float)
+        return {"camera": cam, "reference": ref, "target": tgt, "human": human}
     except Exception:
         return None
 
@@ -156,6 +164,8 @@ class UnrealRelativePosition(torch.utils.data.Dataset):
         test_ratio: float = 0.0,
         seed: int = 8,
         name: str = "unreal_position",
+        perspective: str = "camera",
+        human_label: Optional[str] = "Human",
     ):
         super().__init__()
         self.root = Path(root)
@@ -169,6 +179,14 @@ class UnrealRelativePosition(torch.utils.data.Dataset):
         self.back_deg = back_degrees
         self.split_cfg = SplitConfig(split_ratio=split_ratio, seed=seed)
         self.test_ratio = float(test_ratio)
+        self.perspective = perspective.lower()
+        if self.perspective not in ("camera", "human"):
+            raise ValueError(f"Unsupported perspective: {perspective}")
+        self.human_label = human_label
+        if self.human_label is not None:
+            self.human_label = str(self.human_label)
+        if self.perspective == "human" and not self.human_label:
+            raise ValueError("human_label must be provided when perspective is 'human'.")
 
         if image_mean == "imagenet":
             mean = [0.485, 0.456, 0.406]
@@ -189,26 +207,46 @@ class UnrealRelativePosition(torch.utils.data.Dataset):
         )
 
         self.samples: List[Tuple[Path, int]] = []
-        self._index_samples()
+        self._index_samples(perspective=self.perspective)
         self._make_split_indices()
 
         # classes: 4 (without ambiguous) or 5 (with ambiguous)
         self.num_classes = 4 if self.exclude_ambiguous else 5
 
-    def _index_samples(self):
+    def _index_samples(self, perspective: str = "camera"):
         imgs: List[Path] = []
         for pat in ("*.jpg", "*.jpeg"):
-            imgs.extend(sorted(self.root.glob(pat)))
+            if perspective == "camera":
+                imgs.extend(sorted(self.root.glob(pat))[:5000]) # Because we test on 5000 images for easy task
+            elif perspective == "human":
+                imgs.extend(sorted(self.root.glob(pat))) # Because we test on all images for hard task
+            else:
+                raise ValueError(f"Unsupported perspective: {perspective}")
         for img_path in imgs:
             json_path = _matching_json_for_image(img_path)
             if json_path is None:
                 continue
-            pos = _load_positions(json_path, self.reference_label, self.target_label)
-            if pos is None:
+            positions = _load_positions(
+                json_path,
+                self.reference_label,
+                self.target_label,
+                human_label=self.human_label,
+            )
+            if positions is None:
                 continue
-            cam, ref, tgt = pos
+            observer_key = "camera" if self.perspective == "camera" else "human"
+            observer = positions.get(observer_key)
+            if observer is None:
+                continue
+            ref = positions["reference"]
+            tgt = positions["target"]
             label_str = classify_relative_direction(
-                cam, ref, tgt, self.amb_deg, self.front_deg, self.back_deg
+                observer,
+                ref,
+                tgt,
+                self.amb_deg,
+                self.front_deg,
+                self.back_deg,
             )
             if self.exclude_ambiguous and label_str == "Ambiguous":
                 continue
