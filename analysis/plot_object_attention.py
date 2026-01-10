@@ -77,11 +77,13 @@ def subplot_layout(n_panels: int, max_cols: int = 3) -> Tuple[int, int]:
     return rows, cols
 
 
-def style_series(ax, layers, values, label, color=None, linestyle="-"):
+def style_series(ax, layers, values, label, color=None, linestyle="-", log_scale: bool = False):
+    if log_scale:
+        ax.set_yscale("log")
     ax.plot(layers, values, marker="o", label=label, color=color, linestyle=linestyle)
 
 
-def plot_cls_to_targets(models: ModelData, targets: List[str], layers: List[int], output: Path):
+def plot_cls_to_targets(models: ModelData, targets: List[str], layers: List[int], output: Path, log_scale: bool = False):
     model_names = sorted(models.keys())
     nrows, ncols = subplot_layout(len(model_names))
     fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5 * nrows), sharex=True, sharey=True)
@@ -92,7 +94,7 @@ def plot_cls_to_targets(models: ModelData, targets: List[str], layers: List[int]
         ax = axes[idx // ncols, idx % ncols]
         for j, target in enumerate(targets):
             series = ensure_series(model, models, "CLS", target, layers)
-            style_series(ax, layers, series, f"CLS→{target}", color=colors[j % len(colors)])
+            style_series(ax, layers, series, f"CLS→{target}", color=colors[j % len(colors)], log_scale=log_scale)
         ax.set_title(model)
         ax.grid(True, alpha=0.3)
     for ax in axes[-1, :]:
@@ -106,7 +108,7 @@ def plot_cls_to_targets(models: ModelData, targets: List[str], layers: List[int]
     plt.close(fig)
 
 
-def plot_object_to_others(models: ModelData, objects: List[str], targets: List[str], layers: List[int], output_dir: Path):
+def plot_object_to_others(models: ModelData, objects: List[str], targets: List[str], layers: List[int], output_dir: Path, log_scale: bool = False):
     colors = plt.cm.tab10.colors
     model_names = sorted(models.keys())
     nrows, ncols = subplot_layout(len(model_names))
@@ -117,7 +119,7 @@ def plot_object_to_others(models: ModelData, objects: List[str], targets: List[s
             ax = axes[idx // ncols, idx % ncols]
             for j, target in enumerate(targets):
                 series = ensure_series(model, models, obj, target, layers)
-                style_series(ax, layers, series, f"{obj}→{target}", color=colors[j % len(colors)])
+                style_series(ax, layers, series, f"{obj}→{target}", color=colors[j % len(colors)], log_scale=log_scale)
             ax.set_title(model)
             ax.grid(True, alpha=0.3)
         for ax in axes[-1, :]:
@@ -131,7 +133,7 @@ def plot_object_to_others(models: ModelData, objects: List[str], targets: List[s
         plt.close(fig)
 
 
-def plot_self_attention(models: ModelData, objects: List[str], layers: List[int], output: Path):
+def plot_self_attention(models: ModelData, objects: List[str], layers: List[int], output: Path, log_scale: bool = False):
     model_names = sorted(models.keys())
     columns = objects + ["CLS"]
     nrows = len(model_names)
@@ -142,15 +144,12 @@ def plot_self_attention(models: ModelData, objects: List[str], layers: List[int]
         for j, col in enumerate(columns):
             ax = axes[i, j]
             if col == "CLS":
-                series_ = ensure_series(model, models, "CLS", "CLS", layers)
-                # max min normalize the series for a list of values
-                series = [(value - min(series_)) / (max(series_) - min(series_)) for value in series_] # TODO: check if this is necessary
+                series = ensure_series(model, models, "CLS", "CLS", layers)
                 label = "CLS→CLS"
             else:
-                series_ = ensure_series(model, models, col, col, layers)
-                series = [(value - min(series_)) / (max(series_) - min(series_)) for value in series_] # TODO: check if this is necessary
+                series = ensure_series(model, models, col, col, layers)
                 label = f"{col}→{col}"
-            style_series(ax, layers, series, label)
+            style_series(ax, layers, series, label, log_scale=log_scale)
             if i == 0:
                 ax.set_title(col)
             if j == 0:
@@ -168,9 +167,12 @@ def plot_self_attention(models: ModelData, objects: List[str], layers: List[int]
 
 
 def main():
+    environment = "winter_town"
+    model_type = "large"
     parser = argparse.ArgumentParser(description="Plot object attention grids across models.")
-    parser.add_argument("--input-dir", type=str, default="analysis/outputs/large")
-    parser.add_argument("--output-dir", type=str, default="analysis/outputs/large/object_grids")
+    parser.add_argument("--input-dir", type=str, default=f"analysis/output_{model_type}/{environment}")
+    parser.add_argument("--output-dir", type=str, default=f"analysis/output_{model_type}/{environment}/object_grids")
+    parser.add_argument("--log-scale", action="store_true", help="Use log scale for the y-axis")
     parser.add_argument("--background-name", type=str, default="Background")
     args = parser.parse_args()
 
@@ -181,12 +183,12 @@ def main():
         raise FileNotFoundError(f"No *_object_attention.csv files found in {input_dir}")
 
     models, objects, layers = load_models(csv_files)
-    targets = list(objects) + [args.background_name]
+    base_targets = list(objects) + [args.background_name]
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    plot_cls_to_targets(models, targets, layers, output_dir / "cls_to_targets.png")
-    plot_object_to_others(models, objects, targets, layers, output_dir)
-    plot_self_attention(models, objects, layers, output_dir / "objects_self.png")
+    plot_cls_to_targets(models, base_targets, layers, output_dir / "cls_to_targets.png", args.log_scale)
+    plot_object_to_others(models, objects, base_targets + ["CLS"], layers, output_dir, args.log_scale)
+    plot_self_attention(models, objects, layers, output_dir / "objects_self.png", args.log_scale)
     print(f"Saved plots to {output_dir}")
 
 

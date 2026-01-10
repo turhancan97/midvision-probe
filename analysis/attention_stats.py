@@ -27,6 +27,17 @@ matplotlib.use("Agg")
 from timm.layers import set_fused_attn
 set_fused_attn(False)
 
+# plt.rcParams['font.family'] = 'serif'
+# plt.rcParams['font.serif'] = ['Times New Roman']
+# plt.rcParams['text.color'] = '#333333'
+# plt.rcParams['axes.labelcolor'] = '#333333'
+# plt.rcParams['xtick.color'] = '#333333'
+# plt.rcParams['ytick.color'] = '#333333'
+# plt.rcParams['xtick.labelsize'] = 20
+# plt.rcParams['ytick.labelsize'] = 25
+# plt.rcParams['legend.fontsize'] = 8
+# plt.rcParams['axes.titlesize'] = 20
+
 
 @dataclass
 class ImageRecord:
@@ -325,6 +336,9 @@ def _accumulate_group_attention(
     query_groups: Sequence[str],
     target_groups: Sequence[str],
     aggregator: Optional[GroupAttentionAggregator],
+    cls_index: int,
+    register_name: Optional[str],
+    register_count: int,
 ):
     if aggregator is None:
         return
@@ -343,6 +357,14 @@ def _accumulate_group_attention(
             token_vec[patch_start:] = vector.to(sample_attn.device) # set the patch vectors to the token vector
             token_masks[group] = token_vec # store the token vector for the group
 
+        if register_name and register_count > 0:
+            reg_vec = sample_attn.new_zeros(seq_len)
+            start = 1
+            end = min(start + register_count, patch_start)
+            if end > start:
+                reg_vec[start:end] = 1.0
+                token_masks[register_name] = reg_vec
+
         for query in query_groups:
             if query == "CLS":
                 query_vec = sample_attn.new_zeros(seq_len)
@@ -359,13 +381,21 @@ def _accumulate_group_attention(
                 attn_query = torch.matmul(query_vec, sample_attn)
 
             for target in target_groups:
-                t_mask = token_masks.get(target) # get the token vector for the target, e.g. Human, Tree, Truck
-                if t_mask is None:
+                if query == "CLS" and target == "CLS":
                     continue
-                target_sum = t_mask.sum() # sum of the token vector, number of patches with the object
-                if target_sum <= 0:
-                    continue
-                target_vec = t_mask / target_sum
+                if target == "CLS":
+                    target_vec = sample_attn.new_zeros(seq_len)
+                    if cls_index >= seq_len:
+                        raise ValueError(f"CLS index {cls_index} exceeds sequence length {seq_len}")
+                    target_vec[cls_index] = 1.0
+                else:
+                    t_mask = token_masks.get(target) # get the token vector for the target, e.g. Human, Tree, Truck
+                    if t_mask is None:
+                        continue
+                    target_sum = t_mask.sum() # sum of the token vector, number of patches with the object
+                    if target_sum <= 0:
+                        continue
+                    target_vec = t_mask / target_sum
                 score = torch.dot(attn_query, target_vec)
                 aggregator.update(layer, query, target, float(score))
 
@@ -447,6 +477,8 @@ def _analyze_model(
     aggregator: Optional[GroupAttentionAggregator] = None
     query_groups: Sequence[str] = []
     target_groups: Sequence[str] = []
+    register_name: Optional[str] = None
+    register_count = 0
     if mask_cfg is not None:
         patch_vectors = _prepare_patch_vectors(image_records, patch_kernel)
         if patch_vectors and patch_vectors[0]:
@@ -458,6 +490,15 @@ def _analyze_model(
                 background_name = mask_cfg.get("background_name", "Background")
                 if background_name not in target_groups:
                     target_groups.append(background_name)
+            register_cfg = mask_cfg.get("register_tokens", {})
+            if register_cfg.get("enable", False):
+                register_name = str(register_cfg.get("name", "Register"))
+                register_count = max(0, int(register_cfg.get("count", 0)))
+                if register_count > 0:
+                    if register_name not in query_groups:
+                        query_groups.append(register_name)
+                    if register_name not in target_groups:
+                        target_groups.append(register_name)
         else:
             logger.warning("Mask configuration enabled but no mask data found; skipping object analysis.")
 
@@ -494,6 +535,9 @@ def _analyze_model(
                                 query_groups,
                                 target_groups,
                                 aggregator,
+                                cls_index,
+                                register_name,
+                                register_count,
                             )
     finally:
         _disable_recorders(recorders)
