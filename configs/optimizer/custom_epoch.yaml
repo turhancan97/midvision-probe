@@ -1,0 +1,5 @@
+probe_lr: 0.001
+weight_decay: 0.001
+model_lr: 0.0
+n_epochs: 1000 # camera 400, human 500
+warmup_epochs: 250 # camera 100, human 50

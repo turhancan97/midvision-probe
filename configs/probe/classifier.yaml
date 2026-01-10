@@ -1,4 +1,4 @@
-_target_: evals.models.probes.ClassificationHead
+_target_: evals.models.probes.ClassificationHead # ABMILPHead # EfficientProbing # ClassificationHead
 num_classes: 10
 use_layernorm: true
 dropout_rate: 0.0
