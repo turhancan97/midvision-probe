@@ -130,8 +130,9 @@ def collect_images(root: Path, limit: int) -> List[Path]:
 
 
 def main():
+    environment = "winter_town"
     parser = argparse.ArgumentParser(description="Visualize patch-level masks to verify extraction.")
-    parser.add_argument("--image-dir", type=str, default="analysis/images")
+    parser.add_argument("--image-dir", type=str, default=f"analysis/images/{environment}")
     parser.add_argument("--metadata-dir", type=str, default="metadata")
     parser.add_argument("--mask-pattern", type=str, default="mask_{name}.png")
     parser.add_argument("--groups", nargs="+", default=["Human", "Tree", "Truck"])
@@ -139,8 +140,8 @@ def main():
     parser.add_argument("--background-name", type=str, default="Background")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--patch-size", type=int, default=16)
-    parser.add_argument("--max-images", type=int, default=5)
-    parser.add_argument("--output-dir", type=str, default="analysis/outputs/patch_debug")
+    parser.add_argument("--max-images", type=int, default=15)
+    parser.add_argument("--output-dir", type=str, default=f"analysis/outputs/patch_debug/{environment}")
     args = parser.parse_args()
 
     image_dir = Path(args.image_dir)
