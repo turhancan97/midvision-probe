@@ -171,17 +171,23 @@ class CROCOV2(nn.Module):
         posvis = pos
         posvis = pos[~masks].view(B, -1, 2)
 
-        embeds = []
+        embeds = []  #* CROCOV2 has no cls_token
         for i, blk in enumerate(self.model.enc_blocks):
             x = blk(x, posvis)
             if i in self.multilayers:
+                # Apply encoder LayerNorm for the last layer (critical for good features!)
+                if i == self.multilayers[-1]:
+                    x_normed = self.model.enc_norm(x)
+                else:
+                    x_normed = x
+                    
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
-                        x.permute(0, 2, 1)
+                        x_normed.permute(0, 2, 1)
                     ).permute(0, 2, 1)
                     embeds.append(x_batched)
                 else:
-                    embeds.append(x)
+                    embeds.append(x_normed)
                 if len(embeds) == len(self.multilayers):
                     break
 
@@ -192,10 +198,11 @@ class CROCOV2(nn.Module):
         if self.efficient_probe:
             return embeds[0]
 
+        # NO CLS TOKEN, so no below conditions are the same
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
-            return embeds[0][:, 1:].mean(dim=1)
+            return embeds[0].mean(dim=1)
         elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
-            return embeds[0][:, 0]
+            return embeds[0].mean(dim=1)
         elif len(outputs) == 1 and self.mean_pool and self.return_cls:
             return embeds[0].mean(dim=1)
         else:

@@ -169,7 +169,7 @@ class CROCO(nn.Module):
         posvis = pos
         posvis = pos[~masks].view(B, -1, 2)
 
-        embeds = []
+        embeds = []  #* CroCo has no cls_token
         for i, blk in enumerate(self.model.enc_blocks):
             x = blk(x, posvis)
             if i in self.multilayers:
@@ -190,10 +190,11 @@ class CROCO(nn.Module):
         if self.efficient_probe:
             return embeds[0]
 
+        # NO CLS TOKEN, so no below conditions are the same
         if len(outputs) == 1 and self.mean_pool and not self.return_cls:
-            return embeds[0][:, 1:].mean(dim=1)
+            return embeds[0].mean(dim=1)
         elif len(outputs) == 1 and self.return_cls and not self.mean_pool:
-            return embeds[0][:, 0]
+            return embeds[0].mean(dim=1)
         elif len(outputs) == 1 and self.mean_pool and self.return_cls:
             return embeds[0].mean(dim=1)
         else:
