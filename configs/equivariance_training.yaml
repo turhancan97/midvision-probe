@@ -8,7 +8,7 @@ wandb:
   use: false
   eval_images: false
 defaults:
-  - optimizer: twenty_epoch
+  - optimizer: custom_epoch
   - backbone: clip_b16_laion
   - dataset: unreal_equivariance
   - probe: regressor
