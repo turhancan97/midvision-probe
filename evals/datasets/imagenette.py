@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import torch
 import torchvision.transforms as T
-from torchvision.datasets import Imagenette
+from torchvision.datasets import Imagenette, FGVCAircraft, Flowers102
 
 
 class ImagenetteDataset(torch.utils.data.Dataset):
@@ -78,15 +78,35 @@ class ImagenetteDataset(torch.utils.data.Dataset):
             ]
         )
 
-        self.dataset = Imagenette(
-            root=self.root,
-            split=imagenette_split,
-            download=download,
-            transform=self.transform,
-        )
+        if name == "imagenette":
+            self.dataset = Imagenette(
+                root=self.root,
+                split=imagenette_split,
+                download=download,
+                transform=self.transform,
+            )
+        elif name == "fgvcaircraft":
+            self.dataset = FGVCAircraft(
+                root=self.root,
+                split=imagenette_split,
+                download=download,
+                transform=self.transform,
+            )
+        elif name == "flowers102":
+            self.dataset = Flowers102(
+                root=self.root,
+                split=imagenette_split,
+                download=download,
+                transform=self.transform,
+            )
+        else:
+            raise ValueError(f"Unsupported dataset: {name}")
 
         # Expose num classes if needed
-        self.num_classes = len(self.dataset.classes)
+        try:
+            self.num_classes = len(self.dataset.classes)
+        except AttributeError:
+            self.num_classes = 102
 
     def __len__(self):
         return len(self.dataset)

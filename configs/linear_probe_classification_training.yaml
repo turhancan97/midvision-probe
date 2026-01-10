@@ -17,7 +17,12 @@ experiment_model: dino_b16
 is_eval: False
 ckpt_path: ""
 output_dir: "result"
-# Ensure CLS token is returned and mean pool is False
+# Ensure CLS token or mean pool is True in the backbone
 backbone:
-  return_cls: true
-  mean_pool: false
+  return_cls: false
+  mean_pool: true
+  efficient_probe: false
+probe:
+  dropout_rate: 0.0
+  use_layernorm: true
+  num_classes: 102 # 10 for Imagenette, 100 for FGVCAircraft, 102 for Flowers102
