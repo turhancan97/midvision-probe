@@ -89,11 +89,13 @@ class CLIP(nn.Module):
         # add pos embed
         pos_embed = resize_pos_embed(self.visual.positional_embedding, x_hw)
         x = self.visual.ln_pre(x + pos_embed.to(x.dtype))
+        x = x.permute(1, 0, 2)
 
         embeds = []
         for i, blk in enumerate(self.visual.transformer.resblocks):
             x = blk(x)
             if i in self.multilayers:
+                x = x.permute(1, 0, 2)
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
                         x.permute(0, 2, 1)
