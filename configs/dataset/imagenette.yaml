@@ -4,4 +4,4 @@ split: train
 load_size: 224
 image_mean: imagenet
 download: false
-name: imagenette
+name: flowers102 # imagenette, fgvcaircraft, flowers102
