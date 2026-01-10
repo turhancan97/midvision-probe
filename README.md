@@ -167,6 +167,28 @@ python evaluate_navi_camera_pose.py backbone=dino_b16 experiment_model=camera_po
 - Configure probe options in `configs/probe/camera_pose_regressor.yaml`
 - Configure experiment options in `configs/navi_camera_pose_training.yaml`
 
+### Feature Map Visualization
+-----------
+- Visualize feature maps from various vision backbones by projecting high-dimensional features into RGB color space using PCA. Useful for qualitatively comparing what different models "see" in images.
+
+```bash
+# Visualize with default backbones (spa_b16, croco_b16, crocov2_b16, dinov2_b14)
+python scripts/visualize_featuremap.py image_folder=/path/to/images
+
+# Visualize with specific backbones
+python scripts/visualize_featuremap.py image_folder=/path/to/images backbones=[dino_b16,dinov2_b14,mae_b16]
+
+# Custom image size and PCA settings
+python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessing.img_size=448 pca.remove_first_component=true
+```
+
+- Output: PNG images with PCA-projected feature maps saved to `visualize/<timestamp>/` directory.
+- Configure default settings in `configs/featuremap_visualization.yaml`
+- PCA options:
+  - `pca.outlier_threshold`: Controls outlier filtering (default: 2.0)
+  - `pca.remove_first_component`: Remove first PCA component to suppress background (default: false)
+  - `pca.interpolation_size`: Size to interpolate feature maps before PCA (default: 224)
+
 #### Important Notes:
 - You can run the `launch_script/launch_position_object.py` to launch the experiments for all the backbones sequentially.
 - Configure dataset root and options in `configs/dataset/unreal_position.yaml`
