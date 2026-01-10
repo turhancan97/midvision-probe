@@ -1,0 +1,28 @@
+system:
+  random_seed: 8
+  num_gpus: 1
+note: ""
+batch_size: 32
+wandb:
+  use: True
+  eval_images: 0
+
+defaults:
+  - optimizer: twenty_epoch
+  - backbone: mae_b16
+  - dataset: navi
+  - probe: camera_pose_regressor
+  - _self_
+
+experiment_name: NAVI_Camera_Pose
+experiment_model: mae_b16
+output_dir: "result"
+
+backbone:
+  return_cls: true
+  mean_pool: false
+  efficient_probe: false
+
+dataset:
+  augment_train: true
+  bbox_crop: true
