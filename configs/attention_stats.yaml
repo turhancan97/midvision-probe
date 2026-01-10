@@ -45,3 +45,15 @@ models:
       return_cls: false
       mean_pool: false
       efficient_probe: false
+  - name: dinov2_b14_reg
+    layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    backbone:
+      _target_: evals.models.dino.DINO
+      dino_name: dinov2
+      model_name: vitb14_reg
+      output: dense
+      layer: -1
+      add_norm: false
+      return_cls: false
+      mean_pool: false
+      efficient_probe: false
