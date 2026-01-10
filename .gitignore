@@ -179,3 +179,5 @@ analysis/aggregated*
 *.pdf
 *.docx
 *.doc
+*.npy
+*.npz
