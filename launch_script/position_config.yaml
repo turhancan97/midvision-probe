@@ -1,0 +1,85 @@
+# Configuration for position between objects training
+# This file contains environment→label mappings and hyperparameter defaults
+
+# Environment to label mappings
+environments:
+  bridge:
+    reference_label: Tree
+    target_label: Truck
+  forest:
+    reference_label: Tree
+    target_label: Rock
+  desert:
+    reference_label: Rock
+    target_label: Truck
+  winter_town:
+    reference_label: Tree
+    target_label: Truck
+  city:
+    reference_label: Cone
+    target_label: Vespa
+  bridge_2:
+    reference_label: TrashBin
+    target_label: Bike
+  forest_2:
+    reference_label: Tent
+    target_label: Bear
+  desert_2:
+    reference_label: Cactus
+    target_label: Camel
+  winter_town_2:
+    reference_label: Snowman
+    target_label: Husky
+  city_2:
+    reference_label: Hydrant
+    target_label: Taxi
+
+# Hyperparameter defaults based on perspective and probe_type
+# Format: perspective -> probe_type -> parameters
+hyperparameters:
+  camera:
+    ambiguity_degree: 15
+    EfficientProbing:
+      return_cls: false
+      mean_pool: false
+      efficient_probe: true
+      epochs: 400
+      warmup_epochs: 100
+    ABMILPHead:
+      return_cls: false
+      mean_pool: false
+      efficient_probe: true
+      epochs: 400
+      warmup_epochs: 100
+    ClassificationHead:
+      return_cls: false
+      mean_pool: true
+      efficient_probe: false
+      epochs: 1000
+      warmup_epochs: 250
+
+  human:
+    ambiguity_degree: 10
+    EfficientProbing:
+      return_cls: false
+      mean_pool: false
+      efficient_probe: true
+      epochs: 500
+      warmup_epochs: 50
+    ABMILPHead:
+      return_cls: false
+      mean_pool: false
+      efficient_probe: true
+      epochs: 500
+      warmup_epochs: 50
+    ClassificationHead:
+      return_cls: false
+      mean_pool: true
+      efficient_probe: false
+      epochs: 1000
+      warmup_epochs: 100
+
+# Default probe settings
+probe:
+  dropout_rate: 0.50
+
