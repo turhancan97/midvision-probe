@@ -23,13 +23,18 @@ SOFTWARE.
 """
 
 import os
-
+from loguru import logger
 import torch
 from hydra.utils import instantiate
 from PIL import ImageFile
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from .taskonomy import TaskonomyDataset
+
+try:
+    from .taskonomy import TaskonomyDataset
+except (ModuleNotFoundError, ImportError) as e:
+    logger.warning(f"Taskonomy dataset not found, using default dataset. Error: {e}")
+    TaskonomyDataset = None
 
 # avoid open file error
 ImageFile.LOAD_TRUNCATED_IMAGES = True

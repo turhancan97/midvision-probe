@@ -4,3 +4,6 @@ checkpoint: "openai"
 output: dense
 layer: -1
 add_norm: true
+return_cls: false
+mean_pool: false
+efficient_probe: false

@@ -1,0 +1,4 @@
+_target_: evals.models.probes.RegressionHead
+output_dim: 7
+use_layernorm: true
+dropout_rate: 0.0

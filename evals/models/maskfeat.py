@@ -93,6 +93,7 @@ class MASKFEAT(torch.nn.Module):
         model_name="maskfeat_vitb16",
         arch="vitb16",
         output="dense",
+        layer=-1,
         global_pool=GLOBAL_POOL,
         return_multilayer=False,
         add_norm=False,
@@ -126,7 +127,8 @@ class MASKFEAT(torch.nn.Module):
             self.multilayers = multilayers
         else:
             self.feat_dim = feat_dim
-            self.multilayers = [multilayers[-1]]
+            layer = multilayers[-1] if layer == -1 else layer
+            self.multilayers = [layer]
         self.layer = "-".join(str(_x) for _x in self.multilayers)
         self.checkpoint_name = f"$maskfeat$_{model_name}_{output}_{self.layer}"
 
