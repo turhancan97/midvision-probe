@@ -474,11 +474,15 @@ class RegressionHead(nn.Module):
         self.dropout_rate = dropout_rate
         self.use_layernorm = use_layernorm
         self.norm = nn.LayerNorm(feat_dim) if use_layernorm else None
-        self.dropout_norm = nn.Dropout(dropout_rate)
-        self.layer = nn.Linear(feat_dim, feat_dim)
-        self.relu = nn.ReLU()
-        self.norm_reg = nn.LayerNorm(feat_dim)
-        self.regressor = nn.Linear(feat_dim, output_dim)
+        self.regressor = nn.Sequential(
+            nn.Linear(feat_dim, feat_dim//2),
+            nn.ReLU(),
+            nn.Linear(feat_dim//2, feat_dim//4),
+            nn.ReLU(),
+            nn.Linear(feat_dim//4, feat_dim//8),
+            nn.ReLU(),
+            nn.Linear(feat_dim//8, output_dim)
+        )
 
     def forward(self, feats):
         # feats is expected to be [B, D] (e.g., CLS token)
@@ -489,10 +493,6 @@ class RegressionHead(nn.Module):
             feats = feats.view(feats.size(0), -1)
         if self.norm is not None:
             feats = self.norm(feats)
-        feats = self.dropout_norm(feats)
-        feats = self.layer(feats)
-        feats = self.relu(feats)
-        feats = self.norm_reg(feats)
         pred = self.regressor(feats)
         return pred
 
@@ -534,8 +534,8 @@ class EfficientProbing(nn.Module):
         num_heads: int = 1,
         qkv_bias: bool = False,
         qk_scale: Optional[float] = None,
-        num_queries: int = 4,
-        d_out: int = 8,
+        num_queries: int = 4, # camera 4, human 4
+        d_out: int = 8, # camera 8, human 8
         use_layernorm: bool = False,
         dropout_rate: float = 0.0,
         attention_map = None,
@@ -617,6 +617,7 @@ class ABMILPHead(nn.Module):
         self.cond = cond
         self.self_attention_apply_to = self_attention_apply_to
         self.content = content
+        # num_patches = 256 if num_patches is None else num_patches # 256 for Large, 196 for Base models
         if self.cond == "pe":
             self.pos_embed = torch.nn.Parameter(
                 torch.from_numpy(
@@ -630,7 +631,7 @@ class ABMILPHead(nn.Module):
         self.self_attn = Attention(feat_dim, num_heads=1) if self.self_attention_apply_to != "none" else nn.Identity()
 
 
-        self.ATTENTION_BRANCHES = 1
+        self.num_queries = 1
 
         attn_pred_layers = []
         for i in range(depth-1):
@@ -639,7 +640,7 @@ class ABMILPHead(nn.Module):
                 (nn.Tanh() if activation == "tanh" else nn.ReLU()),
             ])
 
-        attn_pred_layers.append(nn.Linear(feat_dim, self.ATTENTION_BRANCHES))
+        attn_pred_layers.append(nn.Linear(feat_dim, self.num_queries))
         self.attention_predictor = nn.Sequential(*attn_pred_layers)
         self.norm = nn.LayerNorm(self.feat_dim) if use_layernorm else None
         self.attn_drop = nn.Dropout(dropout_rate)
@@ -667,6 +668,7 @@ class ABMILPHead(nn.Module):
 
         attn_map = self.attention_predictor(predictor_input)
         attn_map = F.softmax(attn_map, dim=1)
+        self.attention_map = attn_map.permute(0, 2, 1)
         attn_map = self.attn_drop(attn_map)
         x_out = x_attn if self.self_attention_apply_to in ["both"] else x
         out = (x_out * attn_map).sum(dim=1)
