@@ -1,7 +1,7 @@
 _target_: evals.models.spa.SPA
 repo_dir: /path/to/SPA/repository
-model_name: vitb16
-pretrained: true
+model_name: vitl16
+pretrained: false
 output: dense
 layer: -1
 add_norm: true
