@@ -16,4 +16,4 @@ experiment_name: SSL_Depth_Probing
 experiment_model: dinov2_b14
 is_eval: False
 ckpt_path: ""
-output_dir: "result"
+output_dir: "result/depth_${dataset.name}"
