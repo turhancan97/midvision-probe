@@ -246,6 +246,29 @@ def train_model(rank, world_size, cfg: DictConfig):
     print(f"Val dataset size: {len(val_loader.dataset)}")
     print(f"Test dataset size: {len(test_loader.dataset)}")
 
+    # class_counts_train = [0, 0, 0, 0]
+    # class_counts_val = [0, 0, 0, 0]
+    # class_counts_test = [0, 0, 0, 0]
+    # for batch in train_loader:
+    #     labels = batch["label"]
+    #     for label in labels:
+    #         class_counts_train[label.item()] += 1
+    # for batch in val_loader:
+    #     labels = batch["label"]
+    #     for label in labels:
+    #         class_counts_val[label.item()] += 1
+    # for batch in test_loader:
+    #     labels = batch["label"]
+    #     for label in labels:
+    #         class_counts_test[label.item()] += 1
+    # print('Train class counts:', class_counts_train)
+    # print('Sum of train class counts:', sum(class_counts_train))
+    # print('Val class counts:', class_counts_val)
+    # print('Sum of val class counts:', sum(class_counts_val))
+    # print('Test class counts:', class_counts_test)
+    # print('Sum of test class counts:', sum(class_counts_test))
+    # print('Sum of class counts:', sum(class_counts_train) + sum(class_counts_val) + sum(class_counts_test))
+
     # ===== Models =====
     model = instantiate(cfg.backbone)
     # freeze backbone
