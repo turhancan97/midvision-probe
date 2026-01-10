@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+
+environment: winter_town
+image_dir: analysis/images/${environment}
+output_dir: analysis/outputs/${environment}
+batch_size: 8
+image_size: 224
+image_mean: imagenet # or "clip" or explicit [r,g,b]
+image_std: imagenet
+cls_index: 0
+object_analysis:
+  enable: true
+  zero_self_attention: false # set true to zero object attention to itself in overlays
+  metadata_dir: metadata
+  mask_pattern: "mask_{name}.png"
+  groups: ["Human", "Tree", "Truck"]
+  include_background: true
+  background_name: Background
+  register_tokens:
+    enable: true # set to false if you don't want to use register tokens
+    name: Register
+    count: 4 # set to 0 if you don't want to use register tokens, set to 4 if you want to use register tokens
+models:
+  - name: dinov2_l14_reg
+    layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    backbone:
+      _target_: evals.models.dino.DINO
+      dino_name: dinov2
+      model_name: vitl14_reg
+      output: dense
+      layer: -1
+      add_norm: false
+      return_cls: false
+      mean_pool: false
+      efficient_probe: false
+  - name: vggt_l16
+    layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    backbone:
+      _target_: evals.models.vggt.VGGT1B
+      repo_dir: /home/kargin/Projects/repositories/vggt
+      output: dense
+      layer: -1
+      add_norm: false
+      return_cls: false
+      mean_pool: false
+      efficient_probe: false
