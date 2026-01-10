@@ -174,29 +174,37 @@ class SPA(nn.Module):
         images = F.interpolate(
             images, size=(224, 224), mode="bilinear", align_corners=False
         )
-        # pad images (if needed) to ensure it matches patch_size
+        # # pad images (if needed) to ensure it matches patch_size
         # images = center_padding(images, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 
+        # Patch embedding
         x = self.model.patch_embed(images)
-        pos_embed_patch = self.model.pos_embed[:, 1:, :]
-        x = x + pos_embed_patch
-
-        cls_token = self.model.cls_token + pos_embed_patch[:, :1, :]
+        
+        # Add position embeddings (cls token position + patch positions)
+        # pos_embed shape: (1, 1 + num_patches, embed_dim)
+        cls_token = self.model.cls_token + self.model.pos_embed[:, :1, :]
+        x = x + self.model.pos_embed[:, 1:, :]
         x = torch.cat((cls_token.expand(x.shape[0], -1, -1), x), dim=1)
 
         embeds = []
         for i, blk in enumerate(self.model.blocks):
             x = blk(x)
             if i in self.multilayers:
+                # Apply final LayerNorm for the last layer (critical for good features!)
+                if i == self.multilayers[-1]:
+                    x_normed = self.model.norm(x)
+                else:
+                    x_normed = x
+                    
                 if self.add_norm:
                     x_batched = self.batchnorms[self.multilayers.index(i)](
-                        x.permute(0, 2, 1)
+                        x_normed.permute(0, 2, 1)
                     ).permute(0, 2, 1)
                     embeds.append(x_batched)
                 else:
-                    embeds.append(x)
+                    embeds.append(x_normed)
                 if len(embeds) == len(self.multilayers):
                     break
 
