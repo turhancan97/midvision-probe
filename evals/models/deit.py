@@ -19,7 +19,7 @@ class DeIT(torch.nn.Module):
         efficient_probe=False,
     ):
         super().__init__()
-
+        self.arch = "vit"
         assert output in ["cls", "gap", "dense"], "Options: [cls, gap, dense]"
         self.output = output
         self.return_cls = return_cls

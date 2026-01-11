@@ -22,6 +22,7 @@ class CLIP(nn.Module):
         efficient_probe=False,
     ):
         super().__init__()
+        self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
         assert output in ["dense-cls", "cls", "gap", "dense"]

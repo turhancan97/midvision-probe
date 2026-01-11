@@ -28,6 +28,7 @@ class VGGT1B(torch.nn.Module):
         super().__init__()
         
         # get model
+        self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
         self.repo_dir = repo_dir

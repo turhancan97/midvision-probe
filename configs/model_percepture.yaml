@@ -7,11 +7,13 @@ batch_size: 16
 wandb:
   use: True
 defaults:
-  - optimizer: ten_epoch
   - backbone: dinov2_b14
   - dataset: twoafcdataset
-  - probe: depth_dpt
   - _self_
 experiment_name: SSL_Model_Percepture
 experiment_model: dinov2_b14
-output_dir: "result"
+output_dir: "result/model_percepture"
+backbone:
+  return_cls: True
+  mean_pool: False
+  efficient_probe: False

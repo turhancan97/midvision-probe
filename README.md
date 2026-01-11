@@ -193,7 +193,7 @@ python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessin
 - You can run the `launch_script/launch_position_object.py` to launch the experiments for all the backbones sequentially.
 - Configure dataset root and options in `configs/dataset/unreal_position.yaml`
 - Configure probe options in `configs/probe/classifier.yaml`
-- Configure optimizer options in `configs/optimizer/twenty_epoch.yaml`
+- Configure optimizer options in `configs/optimizer/custom_epoch.yaml`
 - Configure experiment options in `configs/position_between_objects_training.yaml`
 - This evaluation is now only support following backbones in directory of `configs/backbone`
   - `clip_b16_laion`
