@@ -1,6 +1,8 @@
 import os
 import numpy as np
 import torch
+import pickle
+import scipy
 from datasets import load_dataset
 import json
 from .utils import get_nyu_transforms  # Assuming you have custom transforms in utils.py
@@ -48,16 +50,14 @@ def make_serializable(data):
 
 class NYU_test(torch.utils.data.Dataset):
     """
-    Dataset loader based on Ishan Misra's SSL benchmark, now updated to load
-    from the local processed NYUv2 test data with segmentation and id2label.
+    Dataset loader based on Ishan Misra's SSL benchmark
     """
 
-    def __init__(self, base_path, image_mean="imagenet", center_crop=False):
+    def __init__(self, path, image_mean="imagenet", center_crop=False):
         super().__init__()
         self.name = "NYUv2"
         self.center_crop = center_crop
         self.max_depth = 10.0
-        self.base_path = base_path
 
         # get transforms
         image_size = (480, 480) if center_crop else (480, 640)
@@ -69,72 +69,57 @@ class NYU_test(torch.utils.data.Dataset):
             additional_targets={"depth": "image", "snorm": "image"},
         )
 
-        self.num_instances = len(os.listdir(os.path.join(self.base_path, "images")))
-        print(f"NYUv2 labeled test set: {self.num_instances} instances")
+        # parse data
+        with open(path, "rb") as f:
+            data_dict = pickle.load(f)
+
+        self.indices = data_dict["test_indices"]
+        self.depths = [data_dict["depths"][_i] for _i in self.indices]
+        self.images = [data_dict["images"][_i] for _i in self.indices]
+        self.scenes = [data_dict["scene_types"][_i][0] for _i in self.indices]
+        self.snorms = [data_dict["snorms"][_i] for _i in self.indices]
+        self.segmentations = [data_dict["instances"][_i] for _i in self.indices]
+
+        num_instances = len(self.indices)
+        print(f"NYUv2 labeled test set: {num_instances} instances")
 
     def __len__(self):
-        return self.num_instances
+        return len(self.indices)
 
     def __getitem__(self, index):
-
-        image_path = os.path.join(
-            self.base_path, "images", f"nyuv2_test_{index}_image.png"
-        )
-        depth_path = os.path.join(
-            self.base_path, "depths", f"nyuv2_test_{index}_depth.npy"
-        )
-        norm_path = os.path.join(
-            self.base_path, "normals", f"nyuv2_test_{index}_norm.npy"
-        )
-        npz_path = os.path.join(
-            self.base_path, "segmentations", f"nyuv2_test_{index}_image.npz"
-        )
-        metadata_path = os.path.join(
-            self.base_path, "metadata", f"nyuv2_test_{index}_metadata.npy"
-        )
-        # Load image
-        image = Image.open(image_path).convert("RGB")
-        image = np.array(image)
-
-        # Load depth and surface normals
-        depth = np.load(depth_path)
-        snorm = np.load(norm_path)
-
-        metadata = np.load(metadata_path, allow_pickle=True).item()
-
-        # Load segmentation map and id2label from the npz file
-        npz_data = np.load(npz_path, allow_pickle=True)
-        segmentation_map = npz_data["panoptic_map"]
-        id2label = npz_data["id2label"].item()  # Convert from numpy object
-        id2label_serializable = make_serializable(id2label)
-        id2label_json = json.dumps(id2label_serializable)
-        # Convert the id2label dictionary keys to strings to ensure JSON compatibility
-        # id2label_json_compatible = {str(k): v for k, v in id2label.items()}
-
-        # Apply transforms to image
+        image = self.images[index]
+        depth = self.depths[index]
+        snorm = self.snorms[index]
+        room = self.scenes[index]
+        nyu_index = self.indices[index]
+        segmentation = self.segmentations[index]
+        
+        # transform image
+        image = np.transpose(image, (1, 2, 0))
         image = self.image_transform(image)
 
-        # Set max depth to 10
-        depth[depth > self.max_depth] = 0
+        # set max depth to 10
+        depth[depth > 10] = 0
 
-        # Apply center crop if needed
+        # center crop
         if self.center_crop:
             image = image[..., 80:-80]
             depth = depth[..., 80:-80]
             snorm = snorm[..., 80:-80]
-            segmentation_map = segmentation_map[..., 80:-80]
-
-        # Convert everything to tensors
+            segmentation = segmentation[..., 80:-80]
+        
+        # move to tensor
         depth = torch.tensor(depth).float()[None, :, :]
         snorm = torch.tensor(snorm).float()
+        segmentation = torch.tensor(segmentation)
 
         return {
             "image": image,
             "depth": depth,
             "snorm": snorm,
-            "segmentation": segmentation_map,
-            "metadata": metadata,
-            "id2label": id2label_json,
+            "room": room,
+            "nyu_index": nyu_index,
+            "segmentation": segmentation,
         }
 
 
@@ -145,7 +130,7 @@ class NYU_geonet(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        base_path,
+        path,
         split,
         image_mean="imagenet",
         center_crop=False,
@@ -167,56 +152,50 @@ class NYU_geonet(torch.utils.data.Dataset):
             rotateflip=rotateflip,
             additional_targets={"depth": "image", "snorm": "image"},
         )
-        self.base_path = base_path
 
-        self.image_dir = os.path.join(self.base_path, "images")
-        self.depth_dir = os.path.join(self.base_path, "depths")
-        self.norm_dir = os.path.join(self.base_path, "normals")
-        self.segmentation_dir = os.path.join(self.base_path, "segmentations")
+        # parse dataset
+        self.root_dir = path
+        insts = os.listdir(path)
+        insts.sort()
 
-        self.files = [f.split("_image.png")[0] for f in os.listdir(self.image_dir)]
-        print(f"NYU-GeoNet {split}: {len(self.files)} instances found.")
+        # remove bad indices
+        del insts[21181]
+        del insts[6919]
+
+        assert split in ["train", "valid", "trainval"]
+        if split == "train":
+            self.instances = [x for i, x in enumerate(insts) if i % 20 != 0]
+        elif split == "valid":
+            self.instances = [x for i, x in enumerate(insts) if i % 20 == 0]
+        elif split == "trainval":
+            self.instances = insts
+        else:
+            raise ValueError()
+
+        print(f"NYU-GeoNet {split}: {len(self.instances)} instances.")
 
     def __len__(self):
-        # Length is not required for streaming, return None or any valid number
-        return len(self.files)
+        return len(self.instances)
 
     def __getitem__(self, index):
-        file_base = self.files[index]
+        file_name = self.instances[index]
+        room = "_".join(file_name.split("-")[0].split("_")[:-2])
 
-        # File paths
-        image_path = os.path.join(self.image_dir, f"{file_base}_image.png")
-        depth_path = os.path.join(self.depth_dir, f"{file_base}_depth.npy")
-        norm_path = os.path.join(self.norm_dir, f"{file_base}_norm.npy")
-        npz_path = os.path.join(self.segmentation_dir, f"{file_base}_image.npz")
+        # extract elements from the matlab thing
+        instance = scipy.io.loadmat(os.path.join(self.root_dir, file_name))
+        image = instance["img"][:480, :640]
+        depth = instance["depth"][:480, :640]
+        snorm = torch.tensor(instance["norm"][:480, :640]).permute(2, 0, 1)
 
-        # Construct paths to the image, depth, normals, segmentation, and metadata files
-        # image_path = os.path.join(self.base_path, "images", f"nyuv2_{index}_image.png")
-        # depth_path = os.path.join(self.base_path, "depths", f"nyuv2_{index}_depth.npy")
-        # norm_path = os.path.join(self.base_path, "normals", f"nyuv2_{index}_norm.npy")
-        # npz_path = os.path.join(
-        #     self.base_path, "segmentations", f"nyuv2_{index}_image.npz"
-        # )
-
-        # Load image
-        image = Image.open(image_path).convert("RGB")
-        image = np.array(image).astype(np.uint8)[:480, :640]
+        # process image
+        image[:, :, 0] = image[:, :, 0] + 2 * 122.175
+        image[:, :, 1] = image[:, :, 1] + 2 * 116.169
+        image[:, :, 2] = image[:, :, 2] + 2 * 103.508
+        image = image.astype(np.uint8)
         image = self.image_transform(image)
-        # Load depth and surface normals
-        depth = np.load(depth_path)[:480, :640]
+
         # set max depth to 10
         depth[depth > self.max_depth] = 0
-        snorm = np.load(norm_path)[:480, :640]
-        snorm = torch.tensor(snorm).permute(2, 0, 1)
-
-        # Load segmentation map and id2label from the npz file
-        npz_data = np.load(npz_path, allow_pickle=True)
-        segmentation_map = npz_data["panoptic_map"][:480, :640]
-        id2label = npz_data["id2label"].item()  # Convert from numpy object
-
-        # Convert id2label to JSON serializable format
-        id2label_serializable = make_serializable(id2label)
-        id2label_json = json.dumps(id2label_serializable)
 
         # center crop
         if self.center_crop:
@@ -242,10 +221,4 @@ class NYU_geonet(torch.utils.data.Dataset):
             depth = torch.tensor(depth).float()[None, :, :]
             snorm = torch.tensor(snorm).float()
 
-        return {
-            "image": image,
-            "depth": depth,
-            "snorm": snorm,
-            "segmentation": segmentation_map,
-            "id2label": id2label_json,
-        }
+        return {"image": image, "depth": depth, "snorm": snorm, "room": room}
