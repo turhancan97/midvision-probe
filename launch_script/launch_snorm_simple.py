@@ -25,13 +25,7 @@ project_directory = (
 )
 
 # Base command for running the evaluation script
-base_command = "python evaluate_navi_camera_pose.py \
-backbone={model} \
-experiment_model={model} \
-backbone.return_cls=True \
-backbone.mean_pool=False \
-backbone.efficient_probe=False \
-"
+base_command = "python train_snorm.py backbone={model} experiment_model={model}"
 
 
 # Function to run an evaluation job for a specific model

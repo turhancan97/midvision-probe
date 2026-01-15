@@ -15,7 +15,7 @@ def train_snorm(model_name, config_path, port, seed):
     export WANDB_API_KEY="<YOUR WANDB KEY>"
 
     # Run the training script
-    python train_snorm.py backbone={model_name} +backbone.return_multilayer=True experiment_model=snorm_{model_name} system.port={port} system.random_seed={seed}
+    python train_snorm.py backbone={model_name} experiment_model=snorm_{model_name} system.port={port} system.random_seed={seed}
     """
     )
 

@@ -2,38 +2,26 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 models = [
-    "barlowtwins_resnet50",
-    "beit_v2_vitb16",
-    "byol_resnet50",
-    "clusterfit_resnet50",
-    "deepcluster-v2-resnet50",
-    "densecl_resnet50",
     "dino_b16",
-    "eva_vitb16",
-    "ibot_b16",
-    "jigsaw_resnet50",
+    "dinov2_b14",
+    "dinov2_b14_reg",
+    "dinov2_l14_reg",
+    "dinov3_b16",
+    "croco_b16",
+    "crocov2_b16",
     "mae_b16",
     "maskfeat_vitb16",
-    "milan_vitb16",
-    "mocov2_resnet50",
-    "mocov3_b14",
-    "npid-plusplus_resnet50",
-    "pirl_resnet50",
-    "pixmlm_vitb16",
-    "rotnet_resnet50",
-    "simsiam_resnet50",
-    "sela-v2_resnet50",
-    "simclr_resnet50",
-    "swav_resnet50",
-    "npid_resnet50",
-    "mocov3_resnet50",
+    "spa_b16",
+    "spa_l16",
+    "vggt_l16",
+    "deit3_b16",
+    "clip_b16_laion",
 ]
 
-# TODO: Update the project directory path!
-project_directory = "Path to the project directory"
+project_directory = "/home/kargin/Projects/repositories/midvision-probe"
 
 # Base command for running the evaluation script
-base_command = "python evaluate_scannet_correspondence.py backbone={model}"
+base_command = "python render_scannet_correspondence.py backbone={model} model_name={model}"
 
 
 def run_evaluation(model):

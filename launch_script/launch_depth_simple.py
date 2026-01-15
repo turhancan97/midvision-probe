@@ -4,19 +4,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # List of backbones to evaluate
 models = [
     "dino_b16",
-    # "dinov2_b14",
-    # "dinov2_b14_reg",
-    # "dinov2_l14_reg",
-    # "dinov3_b16",
-    # "croco_b16",
-    # "crocov2_b16",
-    # "mae_b16",
-    # "maskfeat_vitb16",
-    # "spa_b16",
-    # "spa_l16",
-    # "vggt_l16",
-    # "deit3_b16",
-    # "clip_b16_laion",
+    "dinov2_b14",
+    "dinov2_b14_reg",
+    "dinov2_l14_reg",
+    "dinov3_b16",
+    "croco_b16",
+    "crocov2_b16",
+    "mae_b16",
+    "maskfeat_vitb16",
+    "spa_b16",
+    "spa_l16",
+    "vggt_l16",
+    "deit3_b16",
+    "clip_b16_laion",
 ]
 
 # Path to the project directory
@@ -25,7 +25,7 @@ project_directory = (
 )
 
 # Base command for running the evaluation script
-base_command = "python train_depth.py backbone={model} +backbone.return_multilayer=True experiment_model={model}"
+base_command = "python train_depth.py backbone={model} experiment_model={model}"
 
 
 # Function to run an evaluation job for a specific model

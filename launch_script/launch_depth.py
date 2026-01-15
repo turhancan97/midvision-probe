@@ -13,7 +13,7 @@ def train_depth(model_name, config_path, port, seed):
     export WANDB_API_KEY="<WANDB KEY>"
 
     # Run the training script
-    python train_depth.py backbone={model_name} +backbone.return_multilayer=True experiment_model=depth_{model_name} system.port={port} system.random_seed={seed} system.num_gpus=2 batch_size=16 dataset=navi_reldepth
+    python train_depth.py backbone={model_name} experiment_model=depth_{model_name} system.port={port} system.random_seed={seed}
     """
     )
 

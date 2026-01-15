@@ -1,83 +1,59 @@
-import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-models_and_experiments = {
-    # "croco_vitb16": "objectness_croco_vitb16",
-    "barlowtwins_resnet50": "objectness_barlowtwins_resnet50",
-    # "beit_v2_vitb16": "objectness_beit_v2_vitb16",
-    "byol_resnet50": "objectness_byol_resnet50",
-    "clusterfit_resnet50": "objectness_clusterfit_resnet50",
-    "deepcluster-v2-resnet50": "objectness_deepcluster_v2_resnet50",
-    "densecl_resnet50": "objectness_densecl_resnet50",
-    "dino_b16": "objectness_dino_b16",
-    "eva_vitb16": "objectness_eva_vitb16",
-    "ibot_b16": "objectness_ibot_b16",
-    "jigsaw_resnet50": "objectness_jigsaw_resnet50",
-    "mae_b16": "objectness_mae_b16",
-    "maskfeat_vitb16": "objectness_maskfeat_vitb16",
-    # "milan_vitb16": "objectness_milan_vitb16",
-    "mocov2_resnet50": "objectness_mocov2_resnet50",
-    # "mocov3_b14": "objectness_mocov3_b14",
-    "npid-plusplus_resnet50": "objectness_npid_plusplus_resnet50",
-    "pirl_resnet50": "objectness_pirl_resnet50",
-    # "pixmlm_vitb16": "objectness_pixmlm_vitb16",
-    "rotnet_resnet50": "objectness_rotnet_resnet50",
-    "simsiam_resnet50": "objectness_simsiam_resnet50",
-    # "sela-v2_resnet50": "objectness_sela_v2_resnet50",
-    "simclr_resnet50": "objectness_simclr_resnet50",
-    "swav_resnet50": "objectness_swav_resnet50",
-    "npid_resnet50": "objectness_npid_resnet50",
-}
-
-transformer_models = [
-    "croco_vitb16",
-    "beit_v2_vitb16",
+# List of backbones to evaluate
+models = [
     "dino_b16",
-    "eva_vitb16",
-    "ibot_b16",
+    "dinov2_b14",
+    "dinov2_b14_reg",
+    "dinov2_l14_reg",
+    "dinov3_b16",
+    "croco_b16",
+    "crocov2_b16",
     "mae_b16",
     "maskfeat_vitb16",
-    "milan_vitb16",
-    "pixmlm_vitb16",
+    "spa_b16",
+    "spa_l16",
+    "vggt_l16",
+    "deit3_b16",
+    "clip_b16_laion",
 ]
 
-# Base command for running the training script
-base_command = (
-    "python train_generic_objectness.py "
-    "backbone={model} +backbone.return_multilayer=False +backbone.return_kqv=True "
-    "experiment_model={experiment_model} system.random_seed=8 system.num_gpus=1 "
-    "batch_size=1 dataset=voc +output_dir=/p/openvocabdustr/probing_midlevel_vision/code/probing-mid-level-vision/objectness_output"
+# Path to the project directory
+project_directory = (
+    "/home/kargin/Projects/repositories/midvision-probe"
 )
 
+# Base command for running the evaluation script
+base_command = "python train_generic_objectness.py backbone={model} experiment_model={model} model_name={model}"
 
-def run_training(model, experiment_model):
+
+# Function to run an evaluation job for a specific model
+def run_evaluation(model):
     try:
-        command = base_command.format(model=model, experiment_model=experiment_model)
+        # Prepare the command with the model name
+        command = base_command.format(model=model)
 
-        if model not in transformer_models:
-            command += " +backbone.mode_selected=3"
-        else:
-            command += " +backbone.mode_selected=k"
-
+        # Print the command to confirm it's correct
         print(f"Running command: {command}")
 
-        subprocess.run(command, shell=True, check=True)
-        print(f"Completed: {model}")
+        # Execute the command in the specific directory
+        subprocess.run(command, shell=True, check=True, cwd=project_directory)
+        print(f"Completed evaluation: {model}")
     except subprocess.CalledProcessError as e:
-        print(f"Failed to run model {model}: {e}")
+        print(f"Failed to evaluate model {model}: {e}")
 
 
-max_threads = 3
+max_threads = 1
 
+# Use ThreadPoolExecutor to run evaluations in parallel
 with ThreadPoolExecutor(max_workers=max_threads) as executor:
-    futures = [
-        executor.submit(run_training, model, experiment_model)
-        for model, experiment_model in models_and_experiments.items()
-    ]
+    # Submit evaluation tasks to the pool
+    futures = [executor.submit(run_evaluation, model) for model in models]
 
+    # Wait for the tasks to complete
     for future in as_completed(futures):
         try:
-            future.result()
+            future.result()  # This will raise an exception if the task failed
         except Exception as exc:
-            print(f"Generated an exception: {exc}")
+            print(f"An exception occurred: {exc}")
