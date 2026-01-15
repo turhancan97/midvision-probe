@@ -132,7 +132,7 @@ def main(cfg: DictConfig):
     wandb.init(
         project="spair-correspondence",
         config=OmegaConf.to_container(cfg, resolve=True),
-        name=f"eval_{cfg.backbone}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        name=f"eval_{cfg.model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
     )
 
     # ===== Get model =====
@@ -221,6 +221,9 @@ def main(cfg: DictConfig):
 
     # CSV file path
     csv_file = f"{cfg.output_dir}/spair_correspondence_final.csv"
+
+    # Ensure output directory exists
+    os.makedirs(cfg.output_dir, exist_ok=True)
 
     # Check if the file exists
     file_exists = os.path.isfile(csv_file)
