@@ -214,10 +214,11 @@ python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessin
 - If both return_cls and mean_pool are True, it will take mean of all the tokens from the backbone - [B, 1 + (H/P x W/P), D].mean(dim=1) == [B, D]
 - If both return_cls and mean_pool are False, it will not return any features from the backbone and raise an error.
 
-### VGGT, SPA and DINOv3 Notes
-- You need to install the repositories of VGGT, SPA and DINOv3 to use these backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
+### VGGT, SPA, CroCo and DINOv3 Notes
+- You need to install the repositories of VGGT, SPA, CroCo and DINOv3 to use these backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
 - Please refer to following links for installation:
   - [VGGT](https://github.com/facebookresearch/vggt) - the weight are automatically downloaded from the huggingface repository.
   - [SPA](https://github.com/HaoyiZhu/SPA) - the weight are automatically downloaded from the huggingface repository.
+  - [CroCo](https://github.com/naver/croco) - the weight are automatically downloaded to the `ckpt_dir` folder.
   - [DINOv3](https://github.com/facebookresearch/dinov3) - you need to ask for permission to download the weight from the repository and define the location of the weights in the `configs/backbone` folder.
 - You also need to install the dependencies of those repositories.
