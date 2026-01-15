@@ -161,7 +161,7 @@ def main(cfg: DictConfig):
     wandb.init(
         project="scannet-correspondence",
         config=OmegaConf.to_container(cfg, resolve=True),
-        name=f"eval_{cfg.backbone}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        name=f"eval_{cfg.model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
     )
 
     # Initialize model and dataset
@@ -224,7 +224,7 @@ def main(cfg: DictConfig):
         img0 = rgbs[0].permute(1, 2, 0).cpu().numpy()
         img1 = rgbs[1].permute(1, 2, 0).cpu().numpy()
 
-        if i % 10 == 0:
+        if i % 50 == 0:
             instance_output_dir = os.path.join(output_dir, f"instance_{i}")
 
             visualize_and_save_correspondences(
@@ -239,7 +239,7 @@ def main(cfg: DictConfig):
                 corr_err2d.cpu(), c_err3d.cpu(), rel_ang, instance_output_dir
             )
 
-            break
+            # break
 
         # Log to W&B
         if cfg.wandb_use:
@@ -267,10 +267,11 @@ def main(cfg: DictConfig):
     rel_ang = rel_ang * 180 / np.pi
 
     results = []
-    rec_2cm = 100 * (err_3d < 0.02).float().mean(dim=1)
-    bin_rec = compute_binned_performance(rec_2cm, rel_ang, [0, 15, 30, 60, 180])
-    for bin_acc in enumerate(bin_rec):
-        results.append(f"{bin_acc[0] * 100:5.02f}")
+    rec_10px = (err_2d < 10).float().mean(dim=1)
+    bin_rec = compute_binned_performance(rec_10px, rel_ang, [0, 15, 30, 60, 180])
+    for i, bin_acc in enumerate(bin_rec):
+        results.append(f"{bin_acc * 100:.2f}")
+        print(f"Bin Rec {i * 30}-{(i + 1) * 30}°: {bin_acc * 100}")
         wandb.log({f"Bin Rec {i * 30}-{(i + 1) * 30}°": bin_acc * 100})
     # CSV output
     time = datetime.now().strftime("%d%m%Y-%H%M")
@@ -317,14 +318,15 @@ def main(cfg: DictConfig):
     ]
     with open(csv_file, mode="a", newline="") as file:
         writer = csv.writer(file)
-        if not os.path.isfile(csv_file):
+        # if file is empty, write header
+        if file.tell() == 0:
             writer.writerow(header)
         writer.writerow(
             [time]
             + exp_info
             + [f"{100 * (err_2d < t).float().mean():5.02f}" for t in px_thresh]
             + [f"{100 * (err_3d < t).float().mean():5.02f}" for t in metric_thresh]
-            + [f"{bin_acc}" for bin_acc in bin_rec]
+            + [f"{bin_acc * 100:.2f}" for bin_acc in bin_rec]
         )
 
     wandb.finish()
