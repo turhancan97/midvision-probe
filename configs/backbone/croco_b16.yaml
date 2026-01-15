@@ -1,4 +1,5 @@
 _target_: evals.models.croco.CROCO
+repo_dir: /path/to/croco/repository
 output: dense
 model_name: vitb16
 layer: -1

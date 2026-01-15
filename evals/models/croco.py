@@ -3,9 +3,9 @@ import torch.nn.functional as F
 import torch.nn as nn
 from torchvision.transforms import Resize
 from .utils import center_padding, tokens_to_output
-from evals.models.croco_models.croco import CroCoNet
 from .util import load_checkpoint
 import torchvision
+import sys
 
 checkpoints = {
     "vitb16": {
@@ -19,6 +19,7 @@ class CROCO(nn.Module):
     def __init__(
         self,
         model_name="vitb16",
+        repo_dir="",
         layer=-1,
         output="dense",
         return_multilayer=False,
@@ -35,6 +36,8 @@ class CROCO(nn.Module):
         self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
+        self.repo_dir = repo_dir
+        sys.path.append(self.repo_dir)
         # Load the model within __init__
         self.model = self.load_model(model_name)
         num_layers = len(self.model.enc_blocks)
@@ -73,6 +76,7 @@ class CROCO(nn.Module):
 
     def load_model(self, model_name: str):
         """Load the CroCo model from checkpoint."""
+        from models.croco import CroCoNet
         assert model_name in checkpoints.keys(), f"Invalid model: {model_name}"
         ckpt = load_checkpoint(**checkpoints[model_name])
         model = CroCoNet(
