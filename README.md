@@ -24,28 +24,22 @@ If you find this code useful, please consider citing:
 Model Checkpoints
 -----------------
 
-| **Model Name**       | **Backbone**         | **Dataset**    | **Source Link**                                                                                   |
-|-----------------------|----------------------|----------------|---------------------------------------------------------------------------------------------------|
-| Jigsaw               | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| RotNet               | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| NPID                 | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| SeLa-v2              | ResNet-50           | ImageNet-1K    | [SwAV repository](https://github.com/facebookresearch/swav)                                       |
-| NPID++               | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| PIRL                 | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| ClusterFit           | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| DeepCluster-v2       | ResNet-50           | ImageNet-1K    | [SwAV repository](https://github.com/facebookresearch/swav)                                       |
-| SwAV                 | ResNet-50           | ImageNet-1K    | [SwAV repository](https://github.com/facebookresearch/swav)                                       |
-| SimCLR               | ResNet-50           | ImageNet-1K    | [VISSL model zoo](https://github.com/facebookresearch/vissl/blob/main/MODEL_ZOO.md)              |
-| MoCo v2              | ResNet-50           | ImageNet-1K    | [MoCo v2 repository](https://github.com/facebookresearch/moco)                                   |
-| SimSiam              | ResNet-50           | ImageNet-1K    | [MMSelfSup model zoo](https://mmselfsup.readthedocs.io/en/dev-1.x/model_zoo.html)                |
-| BYOL                 | ResNet-50           | ImageNet-1K    | [Unofficial BYOL repo](https://github.com/yaox12/BYOL-PyTorch)                                   |
-| Barlow Twins         | ResNet-50           | ImageNet-1K    | [MMSelfSup model zoo](https://mmselfsup.readthedocs.io/en/dev-1.x/model_zoo.html)                |
-| DenseCL              | ResNet-50           | ImageNet-1K    | [DenseCL repository](https://github.com/WXinlong/DenseCL)                                        |
-| DINO                 | ResNet-50/ViT-B/16  | ImageNet-1K    | [DINO repository](https://github.com/facebookresearch/dino)                                      |
-| MoCo v3              | ResNet-50/ViT-B/16  | ImageNet-1K    | [MoCo v3 repository](https://github.com/facebookresearch/moco-v3)                                |
-| iBOT                 | ViT-B/16            | ImageNet-1K    | [iBOT repository](https://github.com/bytedance/ibot)                                             |
-| MAE                  | ViT-B/16            | ImageNet-1K    | [MAE repository](https://github.com/facebookresearch/mae)                                       |
-| MaskFeat             | ViT-B/16            | ImageNet-1K    | [MMSelfSup model zoo](https://mmselfsup.readthedocs.io/en/dev-1.x/model_zoo.html)                |
+| **Model Name**       | **Backbone**         | **Dataset**                           | **Source Link**                                                                                  |
+|----------------------|----------------------|---------------------------------------|--------------------------------------------------------------------------------------------------|
+| MoCo v3              | ViT-B/16            | ImageNet-1K                            | [MoCo v3 repository](https://github.com/facebookresearch/moco-v3)                                |
+| iBOT                 | ViT-B/16            | ImageNet-1K                            | [iBOT repository](https://github.com/bytedance/ibot)                                             |
+| DINO                 | ViT-B/16            | ImageNet-1K                            | [DINO repository](https://github.com/facebookresearch/dino)                                      |
+| DINOv2               | ViT-B/14            | LVD-142M                               | [DINOv2 repository](https://github.com/facebookresearch/dinov2)                                  |
+| DINOv2-Reg           | ViT-B/14 - L/14     | LVD-142M                               | [DINOv2-Reg repository](https://github.com/facebookresearch/dinov2)                              |
+| DINOv3               | ViT-B/16            | LVD-1689M                              | [DINOv3 repository](https://github.com/facebookresearch/dinov3)                                  |
+| MAE                  | ViT-B/16            | ImageNet-1K                            | [MAE repository](https://github.com/facebookresearch/mae)                                        |
+| MaskFeat             | ViT-B/16            | ImageNet-1K                            | [MMSelfSup model zoo](https://mmselfsup.readthedocs.io/en/dev-1.x/model_zoo.html)                |
+| SPA                  | ViT-B/16            | ScanNet, Hypersim, and more...         | [SPA repository](https://github.com/HaoyiZhu/SPA)                                                |
+| CroCo                | ViT-B/16            | Habitat, ScanNet, and more...          | [CroCo repository](https://github.com/naver/croco)                                               |
+| CROCOV2              | ViT-B/16            | ARKitScenes, MegaDepth, and more...    | [CROCOV2 repository](https://github.com/naver/croco)                                             |
+| VGGT                 | ViT-L/14            | Co3D, MegaDepth, and more...           | [VGG-T repository](https://github.com/facebookresearch/vggt)                                     |
+| DeiT-3               | ViT-B/16            | ImageNet-1K                            | [DeiT-3 repository](https://github.com/facebookresearch/deit3)                                   |
+| CLIP                 | ViT-B/16            | Web Image-Text (WIT)                   | [CLIP repository](https://github.com/openai/CLIP)                                                |
 
 
 Environment Setup
@@ -88,11 +82,68 @@ python evaluate_navi_correspondence.py +backbone=dino_b16
 python evaluate_scannet_correspondence.py +backbone=dino_b16
 ```
 
-Obtabin Visualization
+Obtain Visualization
 -----------
 ```python
 python train_depth.py backbone=beit_v2_vitb16 +backbone.return_multilayer=True experiment_model=depth_beitv2_vitb16 system.port=12345 system.random_seed=10 system.num_gpus=1 batch_size=8 is_eval=true ckpt_path=<PATH_TO_CKPT>
 ```
+
+Evaluate the Mid-level Vision Capabilities
+-----------
+
+### Depth Estimation
+- Train a depth estimator to estimate the depth of the image. The task aims at predicting pixel-wise depth from monocular images.
+
+```bash
+python train_depth.py backbone=dino_b16 experiment_model=depth_dino_b16
+```
+
+- NAVI and NYU Depth V2 datasets are used for training and testing the depth estimator.
+
+
+### Surface Normal Estimation
+- Train a surface normal estimator to estimate the surface normal of the image. The task aims at predicting pixel-wise surface normal from monocular images.
+
+```bash
+python train_snorm.py backbone=dino_b16 experiment_model=snorm_dino_b16
+```
+
+- NAVI and NYU Depth V2 datasets are used for training and testing the surface normal estimator.
+
+### Generic Objectness
+- Train a generic objectness estimator to estimate the objectness of the image. Generic object segmentation (or figure-ground segmentation) refers to the task of separating objects (figure) from the surrounding background without any semantics. This mid-level vision task is different from semantic segmentation (i.e., assigning each pixel to a semantic category) which is commonly used for evaluating the high-level visual capabilities of VFMs.
+
+```bash
+python train_generic_objectness.py backbone=dino_b16 experiment_model=generic_objectness_dino_b16
+```
+
+- VOC07 and VOC12 datasets are used for training and testing the generic objectness estimator.
+
+
+### Geometric Correspondence
+- Train a geometric correspondence estimator to estimate the geometric correspondence of the image. The task aims at predicting the geometric correspondence of the image.
+
+```bash
+python evaluate_navi_correspondence.py +backbone=dino_b16 model_name=dino_b16
+python evaluate_spair_correspondence.py backbone=dino_b16 model_name=dino_b16
+python render_scannet_correspondence.py backbone=dino_b16 model_name=dino_b16
+```
+
+- Visualize the navi correspondence by running the following command:
+```bash
+python render_navi_correspondence.py +backbone=dino_b16 model_name=dino_b16
+```
+
+- NAVI, ScanNet, and SPair-71k datasets are used for training and testing the geometric correspondence estimator.
+
+### Mid-Level Image Similarity
+- Train a mid-level image similarity estimator to estimate the similarity of the images. The task aims at measuring the similarity of two images with mid-level variations (e.g., viewpoint).
+
+```bash
+python evaluate_model_percepture.py backbone=dino_b16 experiment_model=dino_b16
+```
+
+- NIGHTS dataset is used for training and testing the mid-level image similarity estimator.
 
 
 Acknowledgments
@@ -128,6 +179,7 @@ python train_classification.py backbone=dinov2_b14 experiment_model=classificati
 ```
 
 - Metrics logged: Top-1, Top-5, Balanced Accuracy (val). Results CSV saved under `result/linear_probe_classification/`.
+- Imagenette, FGVCAircraft, and Flowers102 datasets are used for training and testing the linear probe for image classification.
 - W&B logging follows the same pattern as other experiments (enable via `wandb.use=True`).
 - Configure dataset options in `configs/dataset/imagenette.yaml` (set `name` to `imagenette`, `fgvcaircraft`, or `flowers102`).
 
@@ -140,6 +192,7 @@ python train_position_between_objects.py backbone=dino_b16 experiment_model=posi
 ```
 
 - Metrics logged: Top‑1, Top‑2, Balanced Accuracy (val). Results CSV saved under `result/position_between_objects/position_between_objects_results_unreal_final.csv`.
+- Unreal dataset is used for training and testing the linear, AbMILP, and efficient probe for position between objects.
 - W&B logging follows the same pattern as other experiments.
 
 ### Equivariance (Unreal)
@@ -162,6 +215,7 @@ python evaluate_navi_camera_pose.py backbone=dino_b16 experiment_model=camera_po
 ```
 
 - Metrics logged: Rotation error (degrees), Translation error (Euclidean distance), MSE loss. Results CSV saved under `result/navi_camera_pose/navi_camera_pose_results.csv`.
+- NAVI dataset is used for training and testing the camera pose regression estimator.
 - W&B logging follows the same pattern as other experiments (enable via `wandb.use=True`).
 - Configure dataset options in `configs/dataset/navi.yaml`
 - Configure probe options in `configs/probe/camera_pose_regressor.yaml`
@@ -207,12 +261,14 @@ python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessin
   - `mae_b16`
   - `maskfeat_vitb16`
   - `vggt_l16`
-  - `spa_b16`
+  - `spa_b16` 
+  - `spa_l16`
 - If you want to sweep the hyperparameters to search for optimal hyperparameters, you can enable the sweep in `configs/position_between_objects_training.yaml`
 - return_cls means return the CLS token features from the backbone - [B, D]
 - mean_pool means mean of patch tokens from the backbone - [B, (H/P x W/P), D].mean(dim=1) == [B, D]
 - If both return_cls and mean_pool are True, it will take mean of all the tokens from the backbone - [B, 1 + (H/P x W/P), D].mean(dim=1) == [B, D]
 - If both return_cls and mean_pool are False, it will not return any features from the backbone and raise an error.
+- If you want to evaluate models with different image sizes than 224x224, you need to change the `size_image` in the `configs/backbone` folder only for CroCo, CROCOV2, SPA. Other models are supported automatically adapted to the image size.
 
 ### VGGT, SPA, CroCo and DINOv3 Notes
 - You need to install the repositories of VGGT, SPA, CroCo and DINOv3 to use these backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
