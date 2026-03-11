@@ -9,13 +9,18 @@ wandb:
 defaults:
   - optimizer: ten_epoch
   - backbone: dinov2_b14
-  - dataset: voc
+  - dataset: voc12
   - probe: binaryhead
   - _self_
 experiment_name: SSL_Objectness_Probing
 experiment_model: dinov2_b14
 is_eval: False
 ckpt_path: ""
-output_dir: "result"
-num_workers: 1
+output_dir: "result/objectness_train"
+num_workers: 8
 model_name: "dinov2_b14"
+backbone:
+  return_cls: False
+  mean_pool: False
+  efficient_probe: False
+  return_multilayer: True

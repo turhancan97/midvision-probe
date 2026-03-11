@@ -10,5 +10,6 @@ note: ""
 defaults:
   - backbone: dinov2_b14
   - _self_
-output_dir: /p/openvocabdustr/probing_midlevel_vision/code/probing-mid-level-vision/result/correspondance
-data_root: /p/openvocabdustr/probing_midlevel_vision/code/probing-mid-level-vision/data/SPair-71k
+model_name: dinov2_b14
+output_dir: result/spair_correspondence
+data_root: /shared/sets/datasets/vision/probing_3D/SPair-71k

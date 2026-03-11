@@ -1,5 +1,6 @@
 _target_: evals.models.croco.CROCO
 repo_dir: /path/to/croco/repository
+size_image: 224
 output: dense
 model_name: vitb16
 layer: -1

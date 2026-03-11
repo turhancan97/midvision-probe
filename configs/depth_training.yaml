@@ -1,9 +1,9 @@
 system:
   random_seed: 8
-  num_gpus: 2
+  num_gpus: 1
   port: 12355
 note: ""
-batch_size: 16
+batch_size: 4
 wandb:
   use: True
 defaults:
@@ -17,3 +17,5 @@ experiment_model: dinov2_b14
 is_eval: False
 ckpt_path: ""
 output_dir: "result/depth_${dataset.name}"
+backbone:
+  return_multilayer: True

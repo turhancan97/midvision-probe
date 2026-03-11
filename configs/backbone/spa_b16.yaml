@@ -1,6 +1,7 @@
 _target_: evals.models.spa.SPA
 repo_dir: /path/to/SPA/repository
 model_name: vitb16
+size_image: 224
 pretrained: true
 output: dense
 layer: -1
