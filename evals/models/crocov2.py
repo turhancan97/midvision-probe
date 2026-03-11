@@ -22,14 +22,11 @@ class CROCOV2(nn.Module):
         self,
         model_name="vitb16",
         repo_dir="",
+        size_image=224,
         layer=-1,
         output="dense",
         return_multilayer=False,
         add_norm=False,
-        return_kqv=False,  # Flag to return K, Q, V
-        fixed_size=480,
-        mode_selected="k",
-        return_layers=None,
         return_cls=False,
         mean_pool=False,
         efficient_probe=False,
@@ -38,6 +35,10 @@ class CROCOV2(nn.Module):
         self.arch = "vit"
         self.return_cls = return_cls
         self.mean_pool = mean_pool
+        self.size_image = size_image
+        self.patch_size = 16  # CroCoNet typically uses a 16x16 patch size
+        self.add_norm = add_norm
+        self.efficient_probe = efficient_probe
         self.repo_dir = repo_dir
         sys.path.append(self.repo_dir)
         # Load the model within __init__
@@ -45,13 +46,6 @@ class CROCOV2(nn.Module):
         num_layers = len(self.model.enc_blocks)
         self.output = output
         self.checkpoint_name = f"crocov2_{model_name}_{output}"
-        self.patch_size = 16  # CroCoNet typically uses a 16x16 patch size
-        self.add_norm = add_norm
-        self.return_kqv = return_kqv  # Store the flag to return K, Q, V
-        self.fixed_size = fixed_size
-        self.resize_transform = Resize((fixed_size, fixed_size))  # Resize for input
-        self.mode_selected = mode_selected
-        self.efficient_probe = efficient_probe
 
         feat_dim = 768
         multilayers = [
@@ -81,87 +75,18 @@ class CROCOV2(nn.Module):
         from models.croco import CroCoNet
         assert model_name in checkpoints.keys(), f"Invalid model: {model_name}"
         ckpt = load_checkpoint(**checkpoints[model_name])
-        model = CroCoNet(
+        model = CroCoNet(img_size=self.size_image,
             **ckpt.get("croco_kwargs", {})
         )  # Initialize CroCoNet with arguments
         model.load_state_dict(ckpt["model"], strict=True)
         return model.eval()
 
-    def preprocess_image(self, rgb_image):
-        """
-        Preprocess the RGB image tensor inside the CROCO class.
-        Args:
-        - rgb_image: Tensor of shape (C, H, W) representing the RGB image.
-
-        Returns:
-        - tensor: Processed tensor ready to be fed into ViT (1, C, H, W).
-        - feat_w, feat_h: Feature width and height after patch embedding.
-        """
-        # Resize the image to the fixed size (fixed_size x fixed_size)
-        rgb_resized = self.resize_transform(rgb_image)
-
-        # Calculate feature map dimensions after patch embedding
-        feat_w, feat_h = (
-            self.fixed_size // self.patch_size,
-            self.fixed_size // self.patch_size,
-        )
-
-        # Unsqueeze to add batch dimension and return
-        tensor = rgb_resized.unsqueeze(0)  # Shape: (1, C, H, W)
-        return tensor, feat_w, feat_h
-
-    def extract_kqv(self, images):
-        """Helper function to extract K, Q, V from the last attention layer in CroCoNet."""
-        feat_out = {}
-        bs = images.shape[0]
-        feat_h, feat_w = (
-            images.shape[-2] // self.patch_size,
-            images.shape[-1] // self.patch_size,
-        )
-
-        def hook_fn_forward_qkv(module, input, output):
-            feat_out["qkv"] = output
-
-        self.model.enc_blocks[-1].attn.qkv.register_forward_hook(hook_fn_forward_qkv)
-
-        with torch.no_grad():
-            x, pos = self.model.patch_embed(images)
-            for blk in self.model.enc_blocks:
-                x = blk(x, pos)
-
-        qkv = (
-            feat_out["qkv"]
-            .reshape(bs, -1, 3, self.model.attn.num_heads, -1)
-            .permute(2, 0, 3, 1, 4)
-        )
-        q, k, v = qkv[0], qkv[1], qkv[2]
-
-        k = k.transpose(1, 2).reshape(bs, -1, feat_h * feat_w)
-        q = q.transpose(1, 2).reshape(bs, -1, feat_h * feat_w)
-        v = v.transpose(1, 2).reshape(bs, -1, feat_h * feat_w)
-
-        if self.mode_selected == "k":
-            feats = k
-        elif self.mode_selected == "q":
-            feats = q
-        elif self.mode_selected == "v":
-            feats = v
-        elif self.mode_selected == "kqv":
-            feats = torch.cat([k, q, v], dim=1)
-
-        return feats
-
     def forward(self, images):
-        if self.return_kqv:
-            processed_tensor, feat_w, feat_h = self.preprocess_image(images)
-            feats = self.extract_kqv(processed_tensor)
-            return feats
-
         images = F.interpolate(
-            images, size=(224, 224), mode="bilinear", align_corners=False
+            images, size=(self.size_image, self.size_image), mode="bilinear", align_corners=False
         )
         # pad images (if needed) to ensure it matches patch_size
-        # images = center_padding(images, self.patch_size)
+        images = center_padding(images, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 

@@ -79,22 +79,6 @@ class DeIT(torch.nn.Module):
         cls_tokens = self.vit.cls_token.expand(B, -1, -1)
         x = x + self.vit.pos_embed
         x = torch.cat((cls_tokens, x), dim=1)
-
-        # embeds = []
-        # for i, blk in enumerate(self.vit.blocks):
-        #     x = blk(x)
-        #     if i in self.multilayers:
-        #         embeds.append(x)
-        #         if len(embeds) == len(self.multilayers):
-        #             break
-
-        # outputs = []
-        # for i, x_i in enumerate(embeds):
-        #     # Apply BatchNorm1d for each output
-        #     if self.add_norm:
-        #         x_i = self.batchnorms[i](x_i)
-        #     x_i = tokens_to_output(self.output, x_i[:, 1:], x_i[:, 0], (h, w))
-        #     outputs.append(x_i)
         
         embeds = []
         for i, blk in enumerate(self.vit.blocks):
