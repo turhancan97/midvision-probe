@@ -33,6 +33,21 @@ environments:
   city_2:
     reference_label: Hydrant
     target_label: Taxi
+  bridge_3:
+    reference_label: TrashBin
+    target_label: Vespa
+  forest_3:
+    reference_label: Rock
+    target_label: Fox
+  desert_3:
+    reference_label: Barrel
+    target_label: Camel
+  winter_town_3:
+    reference_label: Tree
+    target_label: Deer
+  city_3:
+    reference_label: Cone
+    target_label: Bike
 
 # Hyperparameter defaults based on perspective and probe_type
 # Format: perspective -> probe_type -> parameters
