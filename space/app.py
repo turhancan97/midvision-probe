@@ -48,6 +48,11 @@ FAVICON_PATH = ASSETS_DIR / "favicon.png"
 
 DEFAULT_PERSPECTIVE = "camera"
 DEFAULT_SOURCE_MODE = "Sample gallery"
+REAL_WORLD_SOURCE_MODE = "Real-world gallery"
+UPLOAD_SOURCE_MODE = "Upload image"
+GALLERY_SOURCE_MODES = (DEFAULT_SOURCE_MODE, REAL_WORLD_SOURCE_MODE)
+REAL_WORLD_SAMPLES_DIR = APP_DIR / "artifacts" / "real_world_samples"
+REAL_WORLD_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 DEFAULT_MAP_NAME = "mean"
 DEFAULT_ALPHA = 0.25
 DEFAULT_COMPARE_ENABLED = False
@@ -298,42 +303,73 @@ def _get_backbone(model_key: str) -> LoadedBackbone:
 
 
 def _extract_patch_tokens(model: nn.Module, tensor_image: torch.Tensor) -> Tuple[torch.Tensor, int]:
-    feats = model.forward_features(tensor_image)
-    prefix_removed = False
+    """Extract probe tokens aligned with training wrapper: [CLS] + spatial tail."""
 
-    if isinstance(feats, dict):
-        if isinstance(feats.get("x_norm_patchtokens"), torch.Tensor):
-            tokens = feats["x_norm_patchtokens"]
-            prefix_removed = True
-        elif isinstance(feats.get("x_prenorm"), torch.Tensor):
-            tokens = feats["x_prenorm"]
-        elif isinstance(feats.get("x"), torch.Tensor):
-            tokens = feats["x"]
-        elif isinstance(feats.get("last_hidden_state"), torch.Tensor):
-            tokens = feats["last_hidden_state"]
-        else:
-            raise RuntimeError("Could not find token tensor in model.forward_features output dict.")
-    elif isinstance(feats, (tuple, list)):
-        tokens = next((x for x in feats if isinstance(x, torch.Tensor) and x.dim() == 3), None)
-        if tokens is None:
-            raise RuntimeError("Could not parse token tensor from model.forward_features output tuple/list.")
-    elif isinstance(feats, torch.Tensor):
-        tokens = feats
+    patch_size = getattr(model.patch_embed, "patch_size", 16)
+    if isinstance(patch_size, (tuple, list)):
+        if len(patch_size) != 2 or patch_size[0] != patch_size[1]:
+            raise RuntimeError(f"Unsupported patch_size format: {patch_size}")
+        patch_size = int(patch_size[0])
     else:
-        raise RuntimeError("Unsupported model.forward_features output type.")
+        patch_size = int(patch_size)
+
+    h, w = tensor_image.shape[-2:]
+    grid_h, grid_w = h // patch_size, w // patch_size
+    n_patches = int(grid_h * grid_w)
+    if n_patches <= 0:
+        raise RuntimeError("Could not infer spatial patch count from input size.")
+
+    # Mirror evals.models.dinov3_timm.DINOV3TIMM forward path.
+    tokens = model.patch_embed(tensor_image)
+    rope = None
+    attn_mask = None
+    if hasattr(model, "_pos_embed"):
+        tokens = model._pos_embed(tokens)
+        if isinstance(tokens, tuple):
+            if len(tokens) >= 1:
+                rope = tokens[1] if len(tokens) >= 2 else None
+                attn_mask = tokens[2] if len(tokens) >= 3 else None
+                tokens = tokens[0]
+            else:
+                raise RuntimeError("Unexpected empty tuple from _pos_embed.")
+    else:
+        if hasattr(model, "cls_token") and model.cls_token is not None:
+            cls_tok = model.cls_token.expand(tensor_image.shape[0], -1, -1)
+            tokens = torch.cat((cls_tok, tokens), dim=1)
+        if hasattr(model, "pos_embed") and model.pos_embed is not None:
+            tokens = tokens + model.pos_embed
+
+    patch_drop = getattr(model, "patch_drop", None)
+    if patch_drop is not None:
+        tokens = patch_drop(tokens)
+    norm_pre = getattr(model, "norm_pre", None)
+    if norm_pre is not None:
+        tokens = norm_pre(tokens)
+
+    for blk in model.blocks:
+        if rope is not None or attn_mask is not None:
+            try:
+                tokens = blk(tokens, rope=rope, attn_mask=attn_mask)
+            except TypeError:
+                tokens = blk(tokens)
+        else:
+            tokens = blk(tokens)
+        if isinstance(tokens, tuple):
+            if len(tokens) == 0:
+                raise RuntimeError("Transformer block returned an empty tuple.")
+            tokens = tokens[0]
 
     if tokens.dim() != 3:
         raise RuntimeError(f"Expected token tensor with rank 3, got shape {tuple(tokens.shape)}")
+    if tokens.shape[1] < n_patches:
+        raise RuntimeError(f"Token sequence too short: seq={tokens.shape[1]}, patches={n_patches}.")
 
-    if not prefix_removed:
-        num_prefix = getattr(model, "num_prefix_tokens", None)
-        if num_prefix is None:
-            has_cls = getattr(model, "cls_token", None) is not None
-            num_prefix = 1 if has_cls else 0
-        if num_prefix > 0 and tokens.shape[1] > num_prefix:
-            tokens = tokens[:, num_prefix:, :]
+    spatial = tokens[:, -n_patches:, :]
+    if tokens.shape[1] > n_patches:
+        tokens = torch.cat([tokens[:, :1, :], spatial], dim=1)
+    else:
+        tokens = spatial
 
-    n_patches = int(tokens.shape[1])
     side = int(round(math.sqrt(n_patches)))
     if side * side != n_patches:
         raise RuntimeError(
@@ -381,6 +417,54 @@ def _sample_image_path(triplet_id: str, image_name: str) -> Path:
     return _manifest_rel_path(cfg["sample_dir"]) / image_name
 
 
+def _real_world_dir(triplet_id: str) -> Path:
+    return REAL_WORLD_SAMPLES_DIR / triplet_id
+
+
+def _real_world_image_names(triplet_id: str) -> List[str]:
+    rw_dir = _real_world_dir(triplet_id)
+    if not rw_dir.exists():
+        return []
+    names = [
+        path.name
+        for path in rw_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in REAL_WORLD_IMAGE_EXTENSIONS
+    ]
+    return sorted(names)
+
+
+def _source_image_names(triplet_id: str, source_mode: str) -> List[str]:
+    if source_mode == DEFAULT_SOURCE_MODE:
+        return list(TRIPLETS_BY_ID[triplet_id]["sample_images"])
+    if source_mode == REAL_WORLD_SOURCE_MODE:
+        return _real_world_image_names(triplet_id)
+    return []
+
+
+def _source_mode_available(source_mode: str, triplet_id: str) -> bool:
+    if source_mode != REAL_WORLD_SOURCE_MODE:
+        return True
+    return len(_real_world_image_names(triplet_id)) > 0
+
+
+def _source_mode_warning_html(source_mode: str, triplet_id: str) -> str:
+    if source_mode != REAL_WORLD_SOURCE_MODE:
+        return ""
+    if _source_mode_available(source_mode, triplet_id):
+        return ""
+    expected = (_real_world_dir(triplet_id)).as_posix()
+    return (
+        '<div class="banner banner-error">'
+        "<strong>Real-world samples:</strong> none found for this triplet.<br />"
+        f'<span class="banner-sub">Expected images in: {expected}</span>'
+        "</div>"
+    )
+
+
+def _is_run_interactive(model_key: str, source_mode: str, triplet_id: str) -> bool:
+    return _model_entry(model_key).available and _source_mode_available(source_mode, triplet_id)
+
+
 def _resolve_valid_sample_image_path(triplet_id: str, image_name: str) -> Path:
     cfg = TRIPLETS_BY_ID[triplet_id]
     candidates: List[str] = []
@@ -403,8 +487,43 @@ def _resolve_valid_sample_image_path(triplet_id: str, image_name: str) -> Path:
     raise gr.Error(f"No sample images found for triplet '{triplet_id}'.")
 
 
-def _sample_preview(triplet_id: str, image_name: str) -> Image.Image:
-    image_path = _resolve_valid_sample_image_path(triplet_id, image_name)
+def _resolve_valid_real_world_image_path(triplet_id: str, image_name: str) -> Path:
+    names = _real_world_image_names(triplet_id)
+    if not names:
+        raise gr.Error(
+            f"No real-world images found for triplet '{triplet_id}' in {_real_world_dir(triplet_id)}."
+        )
+    if image_name and image_name in names:
+        return _real_world_dir(triplet_id) / image_name
+    return _real_world_dir(triplet_id) / names[0]
+
+
+def _resolve_valid_gallery_image_path(triplet_id: str, source_mode: str, image_name: str) -> Path:
+    if source_mode == DEFAULT_SOURCE_MODE:
+        return _resolve_valid_sample_image_path(triplet_id, image_name)
+    if source_mode == REAL_WORLD_SOURCE_MODE:
+        return _resolve_valid_real_world_image_path(triplet_id, image_name)
+    raise gr.Error(f"Unsupported gallery source mode: {source_mode}")
+
+
+def _gallery_dropdown_update(
+    triplet_id: str,
+    source_mode: str,
+    current_name: str,
+    visible: bool,
+) -> gr.Dropdown:
+    names = _source_image_names(triplet_id, source_mode)
+    value: Optional[str] = current_name if current_name in names else (names[0] if names else None)
+    return gr.Dropdown(choices=names, value=value, visible=visible)
+
+
+def _gallery_preview(triplet_id: str, source_mode: str, image_name: str) -> Optional[Image.Image]:
+    if source_mode not in GALLERY_SOURCE_MODES:
+        return None
+    names = _source_image_names(triplet_id, source_mode)
+    if not names:
+        return None
+    image_path = _resolve_valid_gallery_image_path(triplet_id, source_mode, image_name)
     return Image.open(image_path).convert("RGB")
 
 
@@ -458,10 +577,14 @@ def _prepare_input_image(
     sample_image_name: str,
     uploaded_image: Optional[Image.Image],
 ) -> Tuple[Image.Image, str]:
-    if source_mode == DEFAULT_SOURCE_MODE:
-        image_path = _resolve_valid_sample_image_path(triplet_id, sample_image_name)
+    if source_mode in GALLERY_SOURCE_MODES:
+        image_path = _resolve_valid_gallery_image_path(triplet_id, source_mode, sample_image_name)
         pil_image = Image.open(image_path).convert("RGB")
-        gt_label = _compute_gt_label(image_path, triplet_id, perspective)
+        gt_label = (
+            _compute_gt_label(image_path, triplet_id, perspective)
+            if source_mode == DEFAULT_SOURCE_MODE
+            else "N/A"
+        )
         return pil_image, gt_label
 
     if uploaded_image is None:
@@ -551,14 +674,20 @@ def _infer_core(
 
     attn = head.attention_map[0].detach().float().cpu()
     selected = select_attention_map(attn, map_name=map_name)
-    selected_2d = selected.numpy().reshape(grid_side, grid_side)
+    n_patches = grid_side * grid_side
+    selected_np = selected.numpy().reshape(-1)
+    if selected_np.size < n_patches:
+        raise gr.Error(
+            f"Attention map length {selected_np.size} is smaller than patch grid size {n_patches}."
+        )
+    selected_2d = selected_np[-n_patches:].reshape(grid_side, grid_side)
 
     display_image = _to_display_image(x[0], mean=backbone.mean, std=backbone.std)
     overlay, heatmap = overlay_attention(
         display_image,
         selected_2d,
         alpha=float(alpha),
-        n_patches=grid_side * grid_side,
+        n_patches=n_patches,
         sharpen=bool(sharpen),
         clip_percentile=float(clip_percentile),
         gamma=float(gamma),
@@ -569,12 +698,17 @@ def _infer_core(
     if compare_enabled:
         compare_primary = overlay
         compare_selected = select_attention_map(attn, map_name=compare_map_name)
-        compare_2d = compare_selected.numpy().reshape(grid_side, grid_side)
+        compare_np = compare_selected.numpy().reshape(-1)
+        if compare_np.size < n_patches:
+            raise gr.Error(
+                f"Compare attention map length {compare_np.size} is smaller than patch grid size {n_patches}."
+            )
+        compare_2d = compare_np[-n_patches:].reshape(grid_side, grid_side)
         compare_secondary, _ = overlay_attention(
             display_image,
             compare_2d,
             alpha=float(alpha),
-            n_patches=grid_side * grid_side,
+            n_patches=n_patches,
             sharpen=bool(sharpen),
             clip_percentile=float(clip_percentile),
             gamma=float(gamma),
@@ -684,30 +818,46 @@ def _infer_stream(
         raise
 
 
-def _source_mode_visibility(source_mode: str) -> Tuple[gr.Dropdown, gr.Image, gr.Image]:
-    use_sample = source_mode == DEFAULT_SOURCE_MODE
-    return (
-        gr.Dropdown(visible=use_sample),
-        gr.Image(visible=use_sample),
-        gr.Image(visible=not use_sample),
-    )
+def _on_gallery_image_change(triplet_id: str, source_mode: str, image_name: str) -> gr.Image:
+    use_gallery = source_mode in GALLERY_SOURCE_MODES
+    preview = _gallery_preview(triplet_id, source_mode, image_name) if use_gallery else None
+    return gr.Image(value=preview, visible=use_gallery)
 
 
-def _sample_choices_for_triplet(triplet_id: str, current_name: str) -> gr.Dropdown:
-    names = TRIPLETS_BY_ID[triplet_id]["sample_images"]
-    value = current_name if current_name in names else names[0]
-    return gr.Dropdown(choices=names, value=value)
+def _on_source_mode_change(
+    source_mode: str,
+    triplet_id: str,
+    current_name: str,
+    model_key: str,
+) -> Tuple[gr.Dropdown, gr.Image, gr.Image, str, gr.Button]:
+    use_gallery = source_mode in GALLERY_SOURCE_MODES
+    dropdown = _gallery_dropdown_update(triplet_id, source_mode, current_name, visible=use_gallery)
+    preview = gr.Image(value=_gallery_preview(triplet_id, source_mode, current_name), visible=use_gallery)
+    uploaded = gr.Image(visible=(source_mode == UPLOAD_SOURCE_MODE))
+    source_warning = _source_mode_warning_html(source_mode, triplet_id)
+    run_btn = gr.Button(interactive=_is_run_interactive(model_key, source_mode, triplet_id))
+    return dropdown, preview, uploaded, source_warning, run_btn
 
 
-def _on_triplet_change(triplet_id: str, current_name: str) -> Tuple[gr.Dropdown, Image.Image, str]:
-    names = TRIPLETS_BY_ID[triplet_id]["sample_images"]
-    selected_name = current_name if current_name in names else names[0]
-    dd = gr.Dropdown(choices=names, value=selected_name)
-    preview = _sample_preview(triplet_id, selected_name)
-    return dd, preview, _build_triplet_html(triplet_id)
+def _on_triplet_change(
+    triplet_id: str,
+    source_mode: str,
+    current_name: str,
+    model_key: str,
+) -> Tuple[gr.Dropdown, gr.Image, str, str, gr.Button]:
+    use_gallery = source_mode in GALLERY_SOURCE_MODES
+    dropdown = _gallery_dropdown_update(triplet_id, source_mode, current_name, visible=use_gallery)
+    preview = gr.Image(value=_gallery_preview(triplet_id, source_mode, current_name), visible=use_gallery)
+    source_warning = _source_mode_warning_html(source_mode, triplet_id)
+    run_btn = gr.Button(interactive=_is_run_interactive(model_key, source_mode, triplet_id))
+    return dropdown, preview, _build_triplet_html(triplet_id), source_warning, run_btn
 
 
-def _model_warning_and_button_state(model_key: str) -> Tuple[str, gr.Button]:
+def _model_warning_and_button_state(
+    model_key: str,
+    source_mode: str,
+    triplet_id: str,
+) -> Tuple[str, str, gr.Button]:
     entry = _model_entry(model_key)
     warning_html = build_model_warning(
         model_label=entry.hf_model_id,
@@ -715,18 +865,25 @@ def _model_warning_and_button_state(model_key: str) -> Tuple[str, gr.Button]:
         available=entry.available,
         reason=entry.reason,
     )
-    return warning_html, gr.Button(interactive=entry.available)
+    source_warning = _source_mode_warning_html(source_mode, triplet_id)
+    run_interactive = _is_run_interactive(model_key, source_mode, triplet_id)
+    return warning_html, source_warning, gr.Button(interactive=run_interactive)
 
 
-def _on_backbone_change(model_key: str) -> Tuple[str, gr.Button]:
-    return _model_warning_and_button_state(model_key)
+def _on_backbone_change(model_key: str, source_mode: str, triplet_id: str) -> Tuple[str, str, gr.Button]:
+    return _model_warning_and_button_state(model_key, source_mode, triplet_id)
 
 
-def _on_show_experimental_change(show_experimental: bool, current_model: str) -> Tuple[gr.Dropdown, str, gr.Button]:
+def _on_show_experimental_change(
+    show_experimental: bool,
+    current_model: str,
+    source_mode: str,
+    triplet_id: str,
+) -> Tuple[gr.Dropdown, str, str, gr.Button]:
     value = _resolve_model_value(show_experimental, current_model)
     dropdown = gr.Dropdown(choices=_model_choice_pairs(show_experimental), value=value)
-    warning_html, run_btn = _model_warning_and_button_state(value)
-    return dropdown, warning_html, run_btn
+    warning_html, source_warning, run_btn = _model_warning_and_button_state(value, source_mode, triplet_id)
+    return dropdown, warning_html, source_warning, run_btn
 
 
 def _view_mode_visibility(view_mode: str) -> Tuple[gr.Group, gr.Group]:
@@ -789,18 +946,22 @@ def _serialize_current_settings(
 
 def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
     initial_triplet = _all_triplet_ids()[0]
-    initial_sample = TRIPLETS_BY_ID[initial_triplet]["sample_images"][0]
+    initial_sample = _source_image_names(initial_triplet, DEFAULT_SOURCE_MODE)[0]
     initial_model = _resolve_model_value(show_experimental=show_experimental, current_model=_initial_model_key())
 
     backbone_update = gr.Dropdown(choices=_model_choice_pairs(show_experimental), value=initial_model)
-    warning_html, run_btn_update = _model_warning_and_button_state(initial_model)
+    warning_html, source_warning, run_btn_update = _model_warning_and_button_state(
+        initial_model,
+        DEFAULT_SOURCE_MODE,
+        initial_triplet,
+    )
 
     return (
         DEFAULT_PERSPECTIVE,
         backbone_update,
         initial_triplet,
         DEFAULT_SOURCE_MODE,
-        gr.Dropdown(choices=TRIPLETS_BY_ID[initial_triplet]["sample_images"], value=initial_sample, visible=True),
+        _gallery_dropdown_update(initial_triplet, DEFAULT_SOURCE_MODE, initial_sample, visible=True),
         None,
         DEFAULT_MAP_NAME,
         DEFAULT_ALPHA,
@@ -814,9 +975,10 @@ def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
         DEFAULT_SHARPEN,
         DEFAULT_CLIP_PERCENTILE,
         DEFAULT_GAMMA,
-        _sample_preview(initial_triplet, initial_sample),
+        _gallery_preview(initial_triplet, DEFAULT_SOURCE_MODE, initial_sample),
         _build_triplet_html(initial_triplet),
         warning_html,
+        source_warning,
         run_btn_update,
         build_copy_status("Controls reset to defaults.", ok=True),
         build_stage_indicator("Idle. Configure controls and run inference.", state="idle"),
@@ -828,7 +990,7 @@ def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
 
 def _build_demo() -> gr.Blocks:
     initial_triplet = _all_triplet_ids()[0]
-    initial_sample = TRIPLETS_BY_ID[initial_triplet]["sample_images"][0]
+    initial_sample = _source_image_names(initial_triplet, DEFAULT_SOURCE_MODE)[0]
     initial_model = _initial_model_key()
     initial_entry = _model_entry(initial_model)
     initial_warning = build_model_warning(
@@ -837,6 +999,7 @@ def _build_demo() -> gr.Blocks:
         available=initial_entry.available,
         reason=initial_entry.reason,
     )
+    initial_source_warning = _source_mode_warning_html(DEFAULT_SOURCE_MODE, initial_triplet)
 
     head_html = build_head_html(
         favicon_path=FAVICON_PATH,
@@ -878,13 +1041,13 @@ def _build_demo() -> gr.Blocks:
                         )
                         source_mode = gr.Radio(
                             label="Image Source",
-                            choices=["Sample gallery", "Upload image"],
+                            choices=[DEFAULT_SOURCE_MODE, REAL_WORLD_SOURCE_MODE, UPLOAD_SOURCE_MODE],
                             value=DEFAULT_SOURCE_MODE,
                             elem_id="ctl-source-mode",
                         )
                         sample_name = gr.Dropdown(
-                            label="Sample Image",
-                            choices=TRIPLETS_BY_ID[initial_triplet]["sample_images"],
+                            label="Gallery Image",
+                            choices=_source_image_names(initial_triplet, DEFAULT_SOURCE_MODE),
                             value=initial_sample,
                             visible=True,
                             elem_id="ctl-sample-name",
@@ -895,6 +1058,7 @@ def _build_demo() -> gr.Blocks:
                             visible=False,
                             show_fullscreen_button=True,
                         )
+                        source_warning_html = gr.HTML(value=initial_source_warning)
 
                     with gr.Accordion("Attention", open=True):
                         map_name = gr.Dropdown(
@@ -954,7 +1118,11 @@ def _build_demo() -> gr.Blocks:
                         )
 
                     with gr.Accordion("Output", open=True):
-                        run_btn = gr.Button("Run Inference", variant="primary", interactive=initial_entry.available)
+                        run_btn = gr.Button(
+                            "Run Inference",
+                            variant="primary",
+                            interactive=_is_run_interactive(initial_model, DEFAULT_SOURCE_MODE, initial_triplet),
+                        )
                         with gr.Row():
                             preset_btn = gr.Button("Recommended Preset")
                             reset_btn = gr.Button("Reset All Controls")
@@ -971,14 +1139,19 @@ def _build_demo() -> gr.Blocks:
                     triplet_html = gr.HTML(value=_build_triplet_html(initial_triplet))
                     sample_preview = gr.Image(
                         label="Sample Preview",
-                        value=_sample_preview(initial_triplet, initial_sample),
+                        value=_gallery_preview(initial_triplet, DEFAULT_SOURCE_MODE, initial_sample),
                         show_fullscreen_button=True,
                     )
 
                 with gr.Row():
                     prediction_html = gr.HTML(value=build_prediction_placeholder())
                     labels_html = gr.HTML(
-                        value=build_label_card(gt_label="N/A", pred_label="N/A", pred_prob=0.0, source_mode="Upload image")
+                        value=build_label_card(
+                            gt_label="N/A",
+                            pred_label="N/A",
+                            pred_prob=0.0,
+                            source_mode=UPLOAD_SOURCE_MODE,
+                        )
                     )
 
                 run_info_html = gr.HTML(value=build_run_info_card([("Status", "Waiting for inference")]))
@@ -1031,32 +1204,32 @@ def _build_demo() -> gr.Blocks:
 
         show_experimental.change(
             fn=_on_show_experimental_change,
-            inputs=[show_experimental, backbone],
-            outputs=[backbone, warning_html, run_btn],
+            inputs=[show_experimental, backbone, source_mode, triplet],
+            outputs=[backbone, warning_html, source_warning_html, run_btn],
         )
 
         backbone.change(
             fn=_on_backbone_change,
-            inputs=[backbone],
-            outputs=[warning_html, run_btn],
+            inputs=[backbone, source_mode, triplet],
+            outputs=[warning_html, source_warning_html, run_btn],
         )
 
         triplet.change(
             fn=_on_triplet_change,
-            inputs=[triplet, sample_name],
-            outputs=[sample_name, sample_preview, triplet_html],
+            inputs=[triplet, source_mode, sample_name, backbone],
+            outputs=[sample_name, sample_preview, triplet_html, source_warning_html, run_btn],
         )
 
         sample_name.change(
-            fn=_sample_preview,
-            inputs=[triplet, sample_name],
+            fn=_on_gallery_image_change,
+            inputs=[triplet, source_mode, sample_name],
             outputs=[sample_preview],
         )
 
         source_mode.change(
-            fn=_source_mode_visibility,
-            inputs=[source_mode],
-            outputs=[sample_name, sample_preview, uploaded_image],
+            fn=_on_source_mode_change,
+            inputs=[source_mode, triplet, sample_name, backbone],
+            outputs=[sample_name, sample_preview, uploaded_image, source_warning_html, run_btn],
         )
 
         view_mode.change(
@@ -1108,6 +1281,7 @@ def _build_demo() -> gr.Blocks:
                 sample_preview,
                 triplet_html,
                 warning_html,
+                source_warning_html,
                 run_btn,
                 copy_status_html,
                 stage_html,

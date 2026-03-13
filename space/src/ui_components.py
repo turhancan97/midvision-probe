@@ -110,8 +110,15 @@ def _chip_class(label: str) -> str:
 
 
 def build_label_card(gt_label: str, pred_label: str, pred_prob: float, source_mode: str) -> str:
-    gt_text = gt_label if source_mode == "Sample gallery" else "N/A (uploaded image)"
-    gt_class = _chip_class(gt_label if source_mode == "Sample gallery" else "unknown")
+    if source_mode == "Sample gallery":
+        gt_text = gt_label
+        gt_class = _chip_class(gt_label)
+    elif source_mode == "Real-world gallery":
+        gt_text = "N/A (real-world sample)"
+        gt_class = _chip_class("unknown")
+    else:
+        gt_text = "N/A (uploaded image)"
+        gt_class = _chip_class("unknown")
     pred_class = _chip_class(pred_label)
 
     return f"""
