@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import csv
+import html
 import math
 import tempfile
 from dataclasses import dataclass
@@ -61,6 +63,8 @@ DEFAULT_VIEW_MODE = "Split"
 DEFAULT_SHARPEN = True
 DEFAULT_CLIP_PERCENTILE = 100.0
 DEFAULT_GAMMA = 1.5
+CONF_MARGIN_HIGH = 0.50
+CONF_MARGIN_MED = 0.20
 
 patch_gradio_schema_parser()
 
@@ -465,6 +469,14 @@ def _is_run_interactive(model_key: str, source_mode: str, triplet_id: str) -> bo
     return _model_entry(model_key).available and _source_mode_available(source_mode, triplet_id)
 
 
+def _is_batch_interactive(model_key: str, source_mode: str, triplet_id: str) -> bool:
+    return (
+        _model_entry(model_key).available
+        and source_mode in GALLERY_SOURCE_MODES
+        and _source_mode_available(source_mode, triplet_id)
+    )
+
+
 def _resolve_valid_sample_image_path(triplet_id: str, image_name: str) -> Path:
     cfg = TRIPLETS_BY_ID[triplet_id]
     candidates: List[str] = []
@@ -613,7 +625,228 @@ def _build_run_info_entries(
     if sharpen:
         entries.append(("Clip %", f"{float(clip_percentile):.1f}"))
         entries.append(("Gamma", f"{float(gamma):.2f}"))
+    if source_mode == REAL_WORLD_SOURCE_MODE:
+        entries.append(("Domain", "OOD real-world"))
     return entries
+
+
+def _confidence_bucket(top1_prob: float, top2_prob: float) -> str:
+    margin = top1_prob - top2_prob
+    if margin >= CONF_MARGIN_HIGH:
+        return "High"
+    if margin >= CONF_MARGIN_MED:
+        return "Medium"
+    return "Low"
+
+
+def _prediction_summary(logits: torch.Tensor) -> Dict[str, Any]:
+    logits_f = logits.float()
+    probs = torch.softmax(logits_f, dim=1)[0].detach().cpu()
+    topk = min(2, probs.numel())
+    vals, idxs = torch.topk(probs, k=topk)
+    top1_idx = int(idxs[0].item())
+    top1_prob = float(vals[0].item())
+    top2_idx = int(idxs[1].item()) if topk > 1 else top1_idx
+    top2_prob = float(vals[1].item()) if topk > 1 else 0.0
+    margin = top1_prob - top2_prob
+    logits_np = logits_f[0].detach().cpu().numpy().tolist()
+    return {
+        "pred_idx": top1_idx,
+        "pred_label": CLASSES[top1_idx],
+        "top1_prob": top1_prob,
+        "top2_idx": top2_idx,
+        "top2_label": CLASSES[top2_idx],
+        "top2_prob": top2_prob,
+        "margin": margin,
+        "confidence": _confidence_bucket(top1_prob, top2_prob),
+        "logits": {cls_name: float(logits_np[i]) for i, cls_name in enumerate(CLASSES)},
+    }
+
+
+def _render_run_snapshot(title: str, snap: Dict[str, Any]) -> str:
+    if not snap:
+        return ""
+    logits_line = " | ".join(f"{k}: {v:.4f}" for k, v in snap.get("logits", {}).items())
+    return (
+        f'<div class="card runinfo-card"><div class="card-title">{html.escape(title)}</div>'
+        f'<div class="badge-wrap">'
+        f'<span class="badge"><span class="badge-k">Model</span><span class="badge-v">{html.escape(str(snap.get("model_key", "N/A")))}</span></span>'
+        f'<span class="badge"><span class="badge-k">Triplet</span><span class="badge-v">{html.escape(str(snap.get("triplet_id", "N/A")))}</span></span>'
+        f'<span class="badge"><span class="badge-k">Source</span><span class="badge-v">{html.escape(str(snap.get("source_mode", "N/A")))}</span></span>'
+        f'<span class="badge"><span class="badge-k">Image</span><span class="badge-v">{html.escape(str(snap.get("image_name", "N/A")))}</span></span>'
+        f'<span class="badge"><span class="badge-k">Pred</span><span class="badge-v">{html.escape(str(snap.get("pred_label", "N/A")))}</span></span>'
+        f'<span class="badge"><span class="badge-k">Top-1</span><span class="badge-v">{snap.get("top1_prob", 0.0)*100:.2f}%</span></span>'
+        f'<span class="badge"><span class="badge-k">Top-2</span><span class="badge-v">{snap.get("top2_prob", 0.0)*100:.2f}%</span></span>'
+        f'<span class="badge"><span class="badge-k">Margin</span><span class="badge-v">{snap.get("margin", 0.0)*100:.2f}%</span></span>'
+        f'<span class="badge"><span class="badge-k">Confidence</span><span class="badge-v">{html.escape(str(snap.get("confidence", "N/A")))}</span></span>'
+        f"</div><div class=\"logits-line\"><span>Raw logits</span><code>{html.escape(logits_line)}</code></div></div>"
+    )
+
+
+def _compare_runs_html(pinned: Optional[Dict[str, Any]], latest: Optional[Dict[str, Any]]) -> str:
+    if not pinned and not latest:
+        return (
+            '<div class="card runinfo-card"><div class="card-title">Run vs Run</div>'
+            '<div class="placeholder">Pin result A, then run inference to compare with B.</div></div>'
+        )
+    cards = []
+    if pinned:
+        cards.append(_render_run_snapshot("Pinned A", pinned))
+    if latest:
+        cards.append(_render_run_snapshot("Latest B", latest))
+    summary = ""
+    if pinned and latest:
+        same_pred = pinned.get("pred_label") == latest.get("pred_label")
+        status = "same prediction" if same_pred else "different prediction"
+        delta_margin = float(latest.get("margin", 0.0)) - float(pinned.get("margin", 0.0))
+        summary = (
+            f'<div class="banner {"banner-ok" if same_pred else "banner-warn"}">'
+            f"<strong>Comparison:</strong> {status}. "
+            f"Margin delta (B-A): {delta_margin*100:.2f}%."
+            "</div>"
+        )
+    return summary + "<div>" + "".join(cards) + "</div>"
+
+
+def _update_run_comparison(
+    pinned: Optional[Dict[str, Any]],
+    latest: Optional[Dict[str, Any]],
+) -> str:
+    return _compare_runs_html(pinned, latest)
+
+
+def _pin_current_result(
+    latest: Optional[Dict[str, Any]],
+    pinned: Optional[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], str, str]:
+    if not latest:
+        return pinned, build_copy_status("Run inference first, then pin result A.", ok=False), _compare_runs_html(pinned, latest)
+    new_pinned = dict(latest)
+    status = build_copy_status("Pinned current result as A.", ok=True)
+    return new_pinned, status, _compare_runs_html(new_pinned, latest)
+
+
+def _clear_pinned_result(latest: Optional[Dict[str, Any]]) -> Tuple[None, str, str]:
+    return None, build_copy_status("Cleared pinned result A.", ok=True), _compare_runs_html(None, latest)
+
+
+def _batch_items(
+    perspective: str,
+    triplet_id: str,
+    source_mode: str,
+) -> List[Tuple[str, Path, str]]:
+    if source_mode == DEFAULT_SOURCE_MODE:
+        items: List[Tuple[str, Path, str]] = []
+        for image_name in TRIPLETS_BY_ID[triplet_id]["sample_images"]:
+            path = _sample_image_path(triplet_id, image_name)
+            if not path.exists():
+                continue
+            gt = _compute_gt_label(path, triplet_id, perspective)
+            items.append((image_name, path, gt))
+        if not items:
+            raise gr.Error(f"No simulation samples found for triplet '{triplet_id}'.")
+        return items
+
+    if source_mode == REAL_WORLD_SOURCE_MODE:
+        names = _real_world_image_names(triplet_id)
+        if not names:
+            raise gr.Error(
+                f"No real-world images found for triplet '{triplet_id}' in {_real_world_dir(triplet_id)}."
+            )
+        return [(name, _real_world_dir(triplet_id) / name, "N/A") for name in names]
+
+    raise gr.Error("Batch run is available only for gallery sources.")
+
+
+def _run_batch_inference(
+    perspective: str,
+    model_key: str,
+    triplet_id: str,
+    source_mode: str,
+) -> Tuple[List[List[Any]], Optional[str], str]:
+    if model_key not in MANIFEST["models"]:
+        raise gr.Error("Invalid backbone selection.")
+    if triplet_id not in TRIPLETS_BY_ID:
+        raise gr.Error("Invalid triplet selection.")
+    if perspective not in MANIFEST["perspectives"]:
+        raise gr.Error("Invalid perspective selection.")
+    if source_mode not in GALLERY_SOURCE_MODES:
+        raise gr.Error("Select Sample gallery or Real-world gallery for batch inference.")
+
+    model_entry = _model_entry(model_key)
+    if not model_entry.available:
+        raise gr.Error(model_entry.reason)
+
+    items = _batch_items(perspective=perspective, triplet_id=triplet_id, source_mode=source_mode)
+    backbone = _get_backbone(model_key)
+
+    first_pil = Image.open(items[0][1]).convert("RGB")
+    first_x = backbone.transform(first_pil).unsqueeze(0).to(RUNTIME.device)
+    with torch.inference_mode():
+        with torch.autocast(
+            device_type=RUNTIME.device.type,
+            dtype=RUNTIME.amp_dtype,
+            enabled=(RUNTIME.device.type == "cuda"),
+        ):
+            first_tokens, _ = _extract_patch_tokens(backbone.model, first_x)
+    feat_dim = int(first_tokens.shape[-1])
+    expected = MANIFEST["models"][model_key].get("expected_feat_dim")
+    if expected is not None and int(expected) != feat_dim:
+        raise gr.Error(f"Feature dim mismatch for {model_key}: expected {expected}, got {feat_dim}.")
+    head = _get_head(model_key, perspective, triplet_id, feat_dim)
+
+    headers = [
+        "image_name",
+        "ground_truth",
+        "pred_label",
+        "top1_prob",
+        "top2_label",
+        "top2_prob",
+        "margin",
+        "confidence",
+    ] + [f"logit_{cls_name}" for cls_name in CLASSES]
+
+    rows: List[List[Any]] = []
+    for image_name, image_path, gt_label in items:
+        pil = Image.open(image_path).convert("RGB")
+        x = backbone.transform(pil).unsqueeze(0).to(RUNTIME.device)
+        with torch.inference_mode():
+            with torch.autocast(
+                device_type=RUNTIME.device.type,
+                dtype=RUNTIME.amp_dtype,
+                enabled=(RUNTIME.device.type == "cuda"),
+            ):
+                patch_tokens, _ = _extract_patch_tokens(backbone.model, x)
+                logits = head(patch_tokens)
+
+        summary = _prediction_summary(logits)
+        row = [
+            image_name,
+            gt_label,
+            summary["pred_label"],
+            round(summary["top1_prob"], 6),
+            summary["top2_label"],
+            round(summary["top2_prob"], 6),
+            round(summary["margin"], 6),
+            summary["confidence"],
+        ] + [round(float(summary["logits"][cls_name]), 6) for cls_name in CLASSES]
+        rows.append(row)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="") as tmp:
+        writer = csv.writer(tmp)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        csv_path = tmp.name
+
+    status = build_stage_indicator(
+        f"Batch complete: {len(rows)} images ({source_mode}, {triplet_id}).",
+        state="done",
+    )
+    return rows, csv_path, status
+
+
+def _toggle_advanced_controls(show: bool) -> gr.Group:
+    return gr.Group(visible=bool(show))
 
 
 def _infer_core(
@@ -630,7 +863,21 @@ def _infer_core(
     sharpen: bool,
     clip_percentile: float,
     gamma: float,
-) -> Tuple[str, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], str, str, str, str]:
+) -> Tuple[
+    str,
+    str,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+    str,
+    str,
+    str,
+    str,
+    Dict[str, Any],
+]:
     if model_key not in MANIFEST["models"]:
         raise gr.Error("Invalid backbone selection.")
     if triplet_id not in TRIPLETS_BY_ID:
@@ -716,6 +963,21 @@ def _infer_core(
 
     pred_html, pred_label, pred_prob = build_prediction_card(CLASSES, logits)
     labels_html = build_label_card(gt_label, pred_label, pred_prob, source_mode=source_mode)
+    pred_summary = _prediction_summary(logits)
+    latest_run_snapshot = {
+        "model_key": model_key,
+        "perspective": perspective,
+        "triplet_id": triplet_id,
+        "source_mode": source_mode,
+        "image_name": sample_image_name if source_mode in GALLERY_SOURCE_MODES else "uploaded_image",
+        "pred_label": pred_summary["pred_label"],
+        "top1_prob": pred_summary["top1_prob"],
+        "top2_label": pred_summary["top2_label"],
+        "top2_prob": pred_summary["top2_prob"],
+        "margin": pred_summary["margin"],
+        "confidence": pred_summary["confidence"],
+        "logits": pred_summary["logits"],
+    }
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         heatmap_path = tmp.name
@@ -746,6 +1008,7 @@ def _infer_core(
         run_info_html,
         build_stage_indicator("Inference complete.", state="done"),
         _build_triplet_html(triplet_id),
+        latest_run_snapshot,
     )
 
 
@@ -762,6 +1025,7 @@ def _stage_only(message: str) -> Tuple[Any, ...]:
         gr.update(),
         gr.update(),
         build_stage_indicator(message, state="running"),
+        gr.update(),
         gr.update(),
     )
 
@@ -814,6 +1078,7 @@ def _infer_stream(
             gr.update(),
             build_stage_indicator(f"Inference failed: {exc}", state="error"),
             gr.update(),
+            gr.update(),
         )
         raise
 
@@ -829,14 +1094,17 @@ def _on_source_mode_change(
     triplet_id: str,
     current_name: str,
     model_key: str,
-) -> Tuple[gr.Dropdown, gr.Image, gr.Image, str, gr.Button]:
+) -> Tuple[gr.Dropdown, gr.Image, gr.Image, str, gr.Button, gr.Button]:
     use_gallery = source_mode in GALLERY_SOURCE_MODES
     dropdown = _gallery_dropdown_update(triplet_id, source_mode, current_name, visible=use_gallery)
     preview = gr.Image(value=_gallery_preview(triplet_id, source_mode, current_name), visible=use_gallery)
     uploaded = gr.Image(visible=(source_mode == UPLOAD_SOURCE_MODE))
     source_warning = _source_mode_warning_html(source_mode, triplet_id)
-    run_btn = gr.Button(interactive=_is_run_interactive(model_key, source_mode, triplet_id))
-    return dropdown, preview, uploaded, source_warning, run_btn
+    run_interactive = _is_run_interactive(model_key, source_mode, triplet_id)
+    batch_interactive = _is_batch_interactive(model_key, source_mode, triplet_id)
+    run_btn = gr.Button(interactive=run_interactive)
+    batch_btn = gr.Button(interactive=batch_interactive)
+    return dropdown, preview, uploaded, source_warning, run_btn, batch_btn
 
 
 def _on_triplet_change(
@@ -844,20 +1112,23 @@ def _on_triplet_change(
     source_mode: str,
     current_name: str,
     model_key: str,
-) -> Tuple[gr.Dropdown, gr.Image, str, str, gr.Button]:
+) -> Tuple[gr.Dropdown, gr.Image, str, str, gr.Button, gr.Button]:
     use_gallery = source_mode in GALLERY_SOURCE_MODES
     dropdown = _gallery_dropdown_update(triplet_id, source_mode, current_name, visible=use_gallery)
     preview = gr.Image(value=_gallery_preview(triplet_id, source_mode, current_name), visible=use_gallery)
     source_warning = _source_mode_warning_html(source_mode, triplet_id)
-    run_btn = gr.Button(interactive=_is_run_interactive(model_key, source_mode, triplet_id))
-    return dropdown, preview, _build_triplet_html(triplet_id), source_warning, run_btn
+    run_interactive = _is_run_interactive(model_key, source_mode, triplet_id)
+    batch_interactive = _is_batch_interactive(model_key, source_mode, triplet_id)
+    run_btn = gr.Button(interactive=run_interactive)
+    batch_btn = gr.Button(interactive=batch_interactive)
+    return dropdown, preview, _build_triplet_html(triplet_id), source_warning, run_btn, batch_btn
 
 
 def _model_warning_and_button_state(
     model_key: str,
     source_mode: str,
     triplet_id: str,
-) -> Tuple[str, str, gr.Button]:
+) -> Tuple[str, str, gr.Button, gr.Button]:
     entry = _model_entry(model_key)
     warning_html = build_model_warning(
         model_label=entry.hf_model_id,
@@ -867,10 +1138,20 @@ def _model_warning_and_button_state(
     )
     source_warning = _source_mode_warning_html(source_mode, triplet_id)
     run_interactive = _is_run_interactive(model_key, source_mode, triplet_id)
-    return warning_html, source_warning, gr.Button(interactive=run_interactive)
+    batch_interactive = _is_batch_interactive(model_key, source_mode, triplet_id)
+    return (
+        warning_html,
+        source_warning,
+        gr.Button(interactive=run_interactive),
+        gr.Button(interactive=batch_interactive),
+    )
 
 
-def _on_backbone_change(model_key: str, source_mode: str, triplet_id: str) -> Tuple[str, str, gr.Button]:
+def _on_backbone_change(
+    model_key: str,
+    source_mode: str,
+    triplet_id: str,
+) -> Tuple[str, str, gr.Button, gr.Button]:
     return _model_warning_and_button_state(model_key, source_mode, triplet_id)
 
 
@@ -879,11 +1160,15 @@ def _on_show_experimental_change(
     current_model: str,
     source_mode: str,
     triplet_id: str,
-) -> Tuple[gr.Dropdown, str, str, gr.Button]:
+) -> Tuple[gr.Dropdown, str, str, gr.Button, gr.Button]:
     value = _resolve_model_value(show_experimental, current_model)
     dropdown = gr.Dropdown(choices=_model_choice_pairs(show_experimental), value=value)
-    warning_html, source_warning, run_btn = _model_warning_and_button_state(value, source_mode, triplet_id)
-    return dropdown, warning_html, source_warning, run_btn
+    warning_html, source_warning, run_btn, batch_btn = _model_warning_and_button_state(
+        value,
+        source_mode,
+        triplet_id,
+    )
+    return dropdown, warning_html, source_warning, run_btn, batch_btn
 
 
 def _view_mode_visibility(view_mode: str) -> Tuple[gr.Group, gr.Group]:
@@ -915,6 +1200,7 @@ def _serialize_current_settings(
     model_key: str,
     triplet_id: str,
     source_mode: str,
+    show_advanced: bool,
     sample_name: str,
     map_name: str,
     alpha: float,
@@ -931,6 +1217,7 @@ def _serialize_current_settings(
         "model_key": model_key,
         "triplet_id": triplet_id,
         "source_mode": source_mode,
+        "show_advanced": bool(show_advanced),
         "sample_name": sample_name,
         "map_name": map_name,
         "alpha": float(alpha),
@@ -950,7 +1237,7 @@ def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
     initial_model = _resolve_model_value(show_experimental=show_experimental, current_model=_initial_model_key())
 
     backbone_update = gr.Dropdown(choices=_model_choice_pairs(show_experimental), value=initial_model)
-    warning_html, source_warning, run_btn_update = _model_warning_and_button_state(
+    warning_html, source_warning, run_btn_update, batch_btn_update = _model_warning_and_button_state(
         initial_model,
         DEFAULT_SOURCE_MODE,
         initial_triplet,
@@ -961,6 +1248,7 @@ def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
         backbone_update,
         initial_triplet,
         DEFAULT_SOURCE_MODE,
+        False,
         _gallery_dropdown_update(initial_triplet, DEFAULT_SOURCE_MODE, initial_sample, visible=True),
         None,
         DEFAULT_MAP_NAME,
@@ -980,11 +1268,19 @@ def _reset_controls(show_experimental: bool) -> Tuple[Any, ...]:
         warning_html,
         source_warning,
         run_btn_update,
+        batch_btn_update,
         build_copy_status("Controls reset to defaults.", ok=True),
+        build_copy_status("Pin a run as A to compare against future runs.", ok=True),
+        _compare_runs_html(None, None),
         build_stage_indicator("Idle. Configure controls and run inference.", state="idle"),
+        gr.Group(visible=False),
         gr.Group(visible=True),
         gr.Group(visible=False),
         gr.Group(visible=False),
+        [],
+        None,
+        None,
+        None,
     )
 
 
@@ -1045,6 +1341,11 @@ def _build_demo() -> gr.Blocks:
                             value=DEFAULT_SOURCE_MODE,
                             elem_id="ctl-source-mode",
                         )
+                        show_advanced_controls = gr.Checkbox(
+                            label="Show advanced controls",
+                            value=False,
+                            elem_id="ctl-show-advanced",
+                        )
                         sample_name = gr.Dropdown(
                             label="Gallery Image",
                             choices=_source_image_names(initial_triplet, DEFAULT_SOURCE_MODE),
@@ -1060,62 +1361,63 @@ def _build_demo() -> gr.Blocks:
                         )
                         source_warning_html = gr.HTML(value=initial_source_warning)
 
-                    with gr.Accordion("Attention", open=True):
-                        map_name = gr.Dropdown(
-                            label="Attention View",
-                            choices=["mean", "max", "min", "std", "best_q", "q1", "q2", "q3", "q4"],
-                            value=DEFAULT_MAP_NAME,
-                            elem_id="ctl-map-name",
-                        )
-                        alpha = gr.Slider(
-                            label="Overlay Alpha",
-                            minimum=0.0,
-                            maximum=1.0,
-                            step=0.05,
-                            value=DEFAULT_ALPHA,
-                            elem_id="ctl-alpha",
-                        )
-                        compare_enabled = gr.Checkbox(
-                            label="Enable Compare Mode",
-                            value=DEFAULT_COMPARE_ENABLED,
-                            elem_id="ctl-compare-enabled",
-                        )
-                        compare_map_name = gr.Dropdown(
-                            label="Compare Attention View",
-                            choices=["mean", "max", "min", "std", "best_q", "q1", "q2", "q3", "q4"],
-                            value=DEFAULT_COMPARE_MAP,
-                            visible=False,
-                            elem_id="ctl-compare-map",
-                        )
-                        view_mode = gr.Radio(
-                            label="Result View Mode",
-                            choices=["Split", "Tabs"],
-                            value=DEFAULT_VIEW_MODE,
-                            elem_id="ctl-view-mode",
-                        )
+                    with gr.Group(visible=False) as advanced_controls_group:
+                        with gr.Accordion("Attention", open=False):
+                            map_name = gr.Dropdown(
+                                label="Attention View",
+                                choices=["mean", "max", "min", "std", "best_q", "q1", "q2", "q3", "q4"],
+                                value=DEFAULT_MAP_NAME,
+                                elem_id="ctl-map-name",
+                            )
+                            alpha = gr.Slider(
+                                label="Overlay Alpha",
+                                minimum=0.0,
+                                maximum=1.0,
+                                step=0.05,
+                                value=DEFAULT_ALPHA,
+                                elem_id="ctl-alpha",
+                            )
+                            compare_enabled = gr.Checkbox(
+                                label="Enable Compare Mode",
+                                value=DEFAULT_COMPARE_ENABLED,
+                                elem_id="ctl-compare-enabled",
+                            )
+                            compare_map_name = gr.Dropdown(
+                                label="Compare Attention View",
+                                choices=["mean", "max", "min", "std", "best_q", "q1", "q2", "q3", "q4"],
+                                value=DEFAULT_COMPARE_MAP,
+                                visible=False,
+                                elem_id="ctl-compare-map",
+                            )
+                            view_mode = gr.Radio(
+                                label="Result View Mode",
+                                choices=["Split", "Tabs"],
+                                value=DEFAULT_VIEW_MODE,
+                                elem_id="ctl-view-mode",
+                            )
 
-                    with gr.Accordion("Advanced", open=False):
-                        sharpen = gr.Checkbox(
-                            label="Sharpen Attention",
-                            value=DEFAULT_SHARPEN,
-                            elem_id="ctl-sharpen",
-                        )
-                        clip_percentile = gr.Slider(
-                            label="Clip Percentile",
-                            minimum=90.0,
-                            maximum=100.0,
-                            step=0.5,
-                            value=DEFAULT_CLIP_PERCENTILE,
-                            elem_id="ctl-clip-percentile",
-                        )
-                        gamma = gr.Slider(
-                            label="Gamma (lower = sharper)",
-                            minimum=0.30,
-                            maximum=1.50,
-                            step=0.05,
-                            value=DEFAULT_GAMMA,
-                            elem_id="ctl-gamma",
-                        )
+                        with gr.Accordion("Advanced", open=False):
+                            sharpen = gr.Checkbox(
+                                label="Sharpen Attention",
+                                value=DEFAULT_SHARPEN,
+                                elem_id="ctl-sharpen",
+                            )
+                            clip_percentile = gr.Slider(
+                                label="Clip Percentile",
+                                minimum=90.0,
+                                maximum=100.0,
+                                step=0.5,
+                                value=DEFAULT_CLIP_PERCENTILE,
+                                elem_id="ctl-clip-percentile",
+                            )
+                            gamma = gr.Slider(
+                                label="Gamma (lower = sharper)",
+                                minimum=0.30,
+                                maximum=1.50,
+                                step=0.05,
+                                value=DEFAULT_GAMMA,
+                                elem_id="ctl-gamma",
+                            )
 
                     with gr.Accordion("Output", open=True):
                         run_btn = gr.Button(
@@ -1123,6 +1425,13 @@ def _build_demo() -> gr.Blocks:
                             variant="primary",
                             interactive=_is_run_interactive(initial_model, DEFAULT_SOURCE_MODE, initial_triplet),
                         )
+                        run_batch_btn = gr.Button(
+                            "Run Batch (Current Gallery)",
+                            interactive=_is_batch_interactive(initial_model, DEFAULT_SOURCE_MODE, initial_triplet),
+                        )
+                        with gr.Row():
+                            pin_result_btn = gr.Button("Pin Current as A")
+                            clear_pin_btn = gr.Button("Clear Pin A")
                         with gr.Row():
                             preset_btn = gr.Button("Recommended Preset")
                             reset_btn = gr.Button("Reset All Controls")
@@ -1155,6 +1464,8 @@ def _build_demo() -> gr.Blocks:
                     )
 
                 run_info_html = gr.HTML(value=build_run_info_card([("Status", "Waiting for inference")]))
+                pin_status_html = gr.HTML(value=build_copy_status("Pin a run as A to compare against future runs.", ok=True))
+                compare_runs_html = gr.HTML(value=_compare_runs_html(None, None))
 
                 with gr.Row():
                     legend_html = gr.HTML(value=build_legend_html())
@@ -1198,26 +1509,45 @@ def _build_demo() -> gr.Blocks:
                         )
 
                 download_file = gr.File(label="Download Selected Attention Heatmap")
+                batch_table = gr.Dataframe(
+                    headers=[
+                        "image_name",
+                        "ground_truth",
+                        "pred_label",
+                        "top1_prob",
+                        "top2_label",
+                        "top2_prob",
+                        "margin",
+                        "confidence",
+                    ]
+                    + [f"logit_{cls_name}" for cls_name in CLASSES],
+                    value=[],
+                    interactive=False,
+                    label="Batch Results (Sortable)",
+                )
+                batch_csv_file = gr.File(label="Download Batch CSV")
                 gr.HTML(value=build_footer_html(APP_VERSION))
 
         settings_json = gr.Textbox(visible=False)
+        last_run_state = gr.State(value=None)
+        pinned_run_state = gr.State(value=None)
 
         show_experimental.change(
             fn=_on_show_experimental_change,
             inputs=[show_experimental, backbone, source_mode, triplet],
-            outputs=[backbone, warning_html, source_warning_html, run_btn],
+            outputs=[backbone, warning_html, source_warning_html, run_btn, run_batch_btn],
         )
 
         backbone.change(
             fn=_on_backbone_change,
             inputs=[backbone, source_mode, triplet],
-            outputs=[warning_html, source_warning_html, run_btn],
+            outputs=[warning_html, source_warning_html, run_btn, run_batch_btn],
         )
 
         triplet.change(
             fn=_on_triplet_change,
             inputs=[triplet, source_mode, sample_name, backbone],
-            outputs=[sample_name, sample_preview, triplet_html, source_warning_html, run_btn],
+            outputs=[sample_name, sample_preview, triplet_html, source_warning_html, run_btn, run_batch_btn],
         )
 
         sample_name.change(
@@ -1229,7 +1559,13 @@ def _build_demo() -> gr.Blocks:
         source_mode.change(
             fn=_on_source_mode_change,
             inputs=[source_mode, triplet, sample_name, backbone],
-            outputs=[sample_name, sample_preview, uploaded_image, source_warning_html, run_btn],
+            outputs=[sample_name, sample_preview, uploaded_image, source_warning_html, run_btn, run_batch_btn],
+        )
+
+        show_advanced_controls.change(
+            fn=_toggle_advanced_controls,
+            inputs=[show_advanced_controls],
+            outputs=[advanced_controls_group],
         )
 
         view_mode.change(
@@ -1268,6 +1604,7 @@ def _build_demo() -> gr.Blocks:
                 backbone,
                 triplet,
                 source_mode,
+                show_advanced_controls,
                 sample_name,
                 uploaded_image,
                 map_name,
@@ -1283,11 +1620,19 @@ def _build_demo() -> gr.Blocks:
                 warning_html,
                 source_warning_html,
                 run_btn,
+                run_batch_btn,
                 copy_status_html,
+                pin_status_html,
+                compare_runs_html,
                 stage_html,
+                advanced_controls_group,
                 split_results_group,
                 tabs_results_group,
                 compare_group,
+                batch_table,
+                batch_csv_file,
+                last_run_state,
+                pinned_run_state,
             ],
         )
 
@@ -1299,6 +1644,7 @@ def _build_demo() -> gr.Blocks:
                 backbone,
                 triplet,
                 source_mode,
+                show_advanced_controls,
                 sample_name,
                 map_name,
                 alpha,
@@ -1330,7 +1676,7 @@ def _build_demo() -> gr.Blocks:
             """,
         )
 
-        run_btn.click(
+        run_event = run_btn.click(
             fn=_infer_stream,
             inputs=[
                 perspective,
@@ -1360,7 +1706,32 @@ def _build_demo() -> gr.Blocks:
                 run_info_html,
                 stage_html,
                 triplet_html,
+                last_run_state,
             ],
+        )
+
+        run_event.then(
+            fn=_update_run_comparison,
+            inputs=[pinned_run_state, last_run_state],
+            outputs=[compare_runs_html],
+        )
+
+        run_batch_btn.click(
+            fn=_run_batch_inference,
+            inputs=[perspective, backbone, triplet, source_mode],
+            outputs=[batch_table, batch_csv_file, stage_html],
+        )
+
+        pin_result_btn.click(
+            fn=_pin_current_result,
+            inputs=[last_run_state, pinned_run_state],
+            outputs=[pinned_run_state, pin_status_html, compare_runs_html],
+        )
+
+        clear_pin_btn.click(
+            fn=_clear_pinned_result,
+            inputs=[last_run_state],
+            outputs=[pinned_run_state, pin_status_html, compare_runs_html],
         )
 
     return demo

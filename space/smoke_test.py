@@ -26,7 +26,7 @@ def run_inference_check() -> None:
     sample_name = spa.TRIPLETS_BY_ID[triplet_id]["sample_images"][0]
     model_key = spa._initial_model_key()
 
-    pred_html, labels_html, overlay, heatmap, _, _, _, _, _, run_info_html, _, _ = spa._infer_core(
+    pred_html, labels_html, overlay, heatmap, _, _, _, _, _, run_info_html, _, _, _ = spa._infer_core(
         perspective="camera",
         model_key=model_key,
         triplet_id=triplet_id,

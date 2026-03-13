@@ -66,6 +66,13 @@ def build_prediction_card(classes: Sequence[str], logits: torch.Tensor) -> Tuple
     top1_prob = float(probs[top1_idx])
     top2_label = str(classes[top2_idx_val])
     top2_prob = float(probs[top2_idx_val])
+    margin = top1_prob - top2_prob
+    if margin >= 0.50:
+        confidence = "High"
+    elif margin >= 0.20:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
 
     logits_row = " | ".join(
         f"{_esc(cls)}: {float(value):.4f}" for cls, value in zip(classes, logits_np.tolist())
@@ -87,6 +94,10 @@ def build_prediction_card(classes: Sequence[str], logits: torch.Tensor) -> Tuple
     <div class="prob-label">{_esc(top2_label)}</div>
     <div class="prob-track"><div class="prob-fill p2" style="width: {top2_prob*100:.2f}%"></div></div>
     <div class="prob-val">{top2_prob*100:.2f}%</div>
+  </div>
+  <div class="pred-chip-row">
+    <span class="chip chip-soft">Margin: {margin*100:.2f}%</span>
+    <span class="chip chip-soft">Confidence: {_esc(confidence)}</span>
   </div>
   <div class="logits-line"><span>Raw logits</span><code>{logits_row}</code></div>
 </div>
@@ -113,17 +124,21 @@ def build_label_card(gt_label: str, pred_label: str, pred_prob: float, source_mo
     if source_mode == "Sample gallery":
         gt_text = gt_label
         gt_class = _chip_class(gt_label)
+        source_note = ""
     elif source_mode == "Real-world gallery":
         gt_text = "N/A (real-world sample)"
         gt_class = _chip_class("unknown")
+        source_note = '<div class="banner banner-warn"><strong>OOD mode:</strong> real-world sample outside simulation distribution.</div>'
     else:
         gt_text = "N/A (uploaded image)"
         gt_class = _chip_class("unknown")
+        source_note = ""
     pred_class = _chip_class(pred_label)
 
     return f"""
 <div class="card labels-card">
   <div class="card-title">Ground Truth vs Prediction</div>
+  {source_note}
   <div class="label-grid">
     <div class="label-block">
       <div class="label-k">Ground Truth</div>

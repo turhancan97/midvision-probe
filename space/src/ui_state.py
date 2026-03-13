@@ -12,6 +12,7 @@ PERSISTENT_CONTROL_IDS: List[str] = [
     "ctl-backbone",
     "ctl-triplet",
     "ctl-source-mode",
+    "ctl-show-advanced",
     "ctl-sample-name",
     "ctl-map-name",
     "ctl-alpha",
