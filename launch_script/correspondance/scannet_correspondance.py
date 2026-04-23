@@ -7,6 +7,7 @@ models = [
     "dinov2_b14_reg",
     "dinov2_l14_reg",
     "dinov3_b16",
+    "dinov3_timm",
     "croco_b16",
     "crocov2_b16",
     "mae_b16",

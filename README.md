@@ -32,6 +32,7 @@ Model Checkpoints
 | DINOv2               | ViT-B/14            | LVD-142M                               | [DINOv2 repository](https://github.com/facebookresearch/dinov2)                                  |
 | DINOv2-Reg           | ViT-B/14 - L/14     | LVD-142M                               | [DINOv2-Reg repository](https://github.com/facebookresearch/dinov2)                              |
 | DINOv3               | ViT-B/16            | LVD-1689M                              | [DINOv3 repository](https://github.com/facebookresearch/dinov3)                                  |
+| DINOv3 (timm)        | ViT-S/B/L/H+/7B     | LVD-1689M                              | [timm models on Hugging Face](https://huggingface.co/timm)                                        |
 | MAE                  | ViT-B/16            | ImageNet-1K                            | [MAE repository](https://github.com/facebookresearch/mae)                                        |
 | MaskFeat             | ViT-B/16            | ImageNet-1K                            | [MMSelfSup model zoo](https://mmselfsup.readthedocs.io/en/dev-1.x/model_zoo.html)                |
 | SPA                  | ViT-B/16            | ScanNet, Hypersim, and more...         | [SPA repository](https://github.com/HaoyiZhu/SPA)                                                |
@@ -256,6 +257,7 @@ python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessin
   - `dinov2_b14`
   - `dinov2_b14_reg`
   - `dinov3_b16`
+  - `dinov3_timm`
   - `croco_b16`
   - `crocov2_b16`
   - `mae_b16`
@@ -271,10 +273,13 @@ python scripts/visualize_featuremap.py image_folder=/path/to/images preprocessin
 - If you want to evaluate models with different image sizes than 224x224, you need to change the `size_image` in the `configs/backbone` folder only for CroCo, CROCOV2, SPA. Other models are supported automatically adapted to the image size.
 
 ### VGGT, SPA, CroCo and DINOv3 Notes
-- You need to install the repositories of VGGT, SPA, CroCo and DINOv3 to use these backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
+- You need to install the repositories of VGGT, SPA, CroCo and local DINOv3 (`dinov3_b16`) to use those backbones. Later, you need to define the location of the repositories in the `configs/backbone` folder.
 - Please refer to following links for installation:
   - [VGGT](https://github.com/facebookresearch/vggt) - the weight are automatically downloaded from the huggingface repository.
   - [SPA](https://github.com/HaoyiZhu/SPA) - the weight are automatically downloaded from the huggingface repository.
   - [CroCo](https://github.com/naver/croco) - the weight are automatically downloaded to the `ckpt_dir` folder.
   - [DINOv3](https://github.com/facebookresearch/dinov3) - you need to ask for permission to download the weight from the repository and define the location of the weights in the `configs/backbone` folder.
+- For timm-based DINOv3 (`dinov3_timm`), no local DINOv3 repository is required. Weights are loaded via timm from Hugging Face model IDs.
+- Quick validation command for timm integration:
+  - `python scripts/validate_dinov3_timm.py --model-name vit_base_patch16_dinov3.lvd1689m --device auto`
 - You also need to install the dependencies of those repositories.
