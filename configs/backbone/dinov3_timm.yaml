@@ -1,0 +1,10 @@
+_target_: evals.models.dinov3_timm.DINOV3TIMM
+model_name: vit_huge_plus_patch16_dinov3.lvd1689m # vit_small_patch16_dinov3.lvd1689m, vit_base_patch16_dinov3.lvd1689m, vit_large_patch16_dinov3.lvd1689m, vit_huge_plus_patch16_dinov3.lvd1689m, vit_7b_patch16_dinov3.lvd1689m
+output: dense
+layer: -1
+add_norm: true
+return_cls: false
+mean_pool: false
+efficient_probe: false
+pretrained: true
+strict_model_name: true

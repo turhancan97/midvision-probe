@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, Sequence
 
 import hydra
 import matplotlib
@@ -20,20 +21,21 @@ from omegaconf import DictConfig, OmegaConf
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn as nn
 import cv2
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 
 from evals.analysis.perspective_divergence import run_perspective_divergence_analysis
 from evals.utils.optim import cosine_decay_linear_warmup
 from evals.utils.seed import set_random_seed
-from evals.datasets.unreal_position import LABEL_TO_INDEX
 
 # use non-interactive backend for headless environments
 matplotlib.use("Agg")
+
+DEFAULT_LABEL_TO_INDEX = {"Front": 0, "Back": 1, "Left": 2, "Right": 3}
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -72,6 +74,98 @@ def balanced_accuracy(logits: torch.Tensor, targets: torch.Tensor, num_classes: 
         return float(sum(recalls) / len(recalls))
 
 
+def resolve_train_subset_size(cfg: DictConfig) -> Optional[int]:
+    raw = getattr(cfg, "train_subset_size", None)
+    if raw is None:
+        return None
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"train_subset_size must be an integer or null, got: {raw}") from exc
+    if n <= 0:
+        return None
+    return n
+
+
+def resolve_result_paths(cfg: DictConfig) -> Tuple[str, Path, Path, Path]:
+    dataset_name = str(getattr(cfg.dataset, "name", "unreal_position"))
+    base_dir = Path(cfg.output_dir) / "position_between_objects"
+    if dataset_name == "unreal_position":
+        result_dir = base_dir
+        final_csv = result_dir / "position_between_objects_results_unreal_final.csv"
+        sweep_csv = result_dir / "position_between_objects_sweep_unreal.csv"
+    else:
+        result_dir = base_dir / dataset_name
+        final_csv = result_dir / f"position_between_objects_results_{dataset_name}.csv"
+        sweep_csv = result_dir / f"position_between_objects_sweep_{dataset_name}.csv"
+    return dataset_name, result_dir, final_csv, sweep_csv
+
+
+def resolve_plot_dir(cfg: DictConfig, result_dir: Path, timestamp: str) -> Path:
+    dataset_name = str(getattr(cfg.dataset, "name", "unreal_position"))
+    probe_name = str(cfg.probe._target_).split(".")[-1]
+    if dataset_name == "unreal_position":
+        grouping = str(getattr(cfg.dataset, "perspective", "camera"))
+        subset = str(getattr(cfg, "environment", "default"))
+    else:
+        grouping = str(getattr(cfg.dataset, "input_mode", getattr(cfg.dataset, "perspective", "default")))
+        subset = dataset_name
+    return result_dir / "plots" / grouping / subset / probe_name / f"{cfg.experiment_model}_{timestamp}"
+
+
+def resolve_class_metadata(dataset_obj: Optional[Any], num_classes: int) -> Tuple[List[int], List[str], Dict[int, str]]:
+    if dataset_obj is not None:
+        class_order = list(getattr(dataset_obj, "class_order", []))
+        class_names = list(getattr(dataset_obj, "class_names", []))
+        index_to_label = getattr(dataset_obj, "index_to_label", None)
+        if class_order and class_names and len(class_order) == len(class_names):
+            idx_to_label = {int(i): str(n) for i, n in zip(class_order, class_names)}
+            return class_order, class_names, idx_to_label
+        if isinstance(index_to_label, dict) and index_to_label:
+            class_order = sorted(int(k) for k in index_to_label.keys())
+            class_names = [str(index_to_label[i]) for i in class_order]
+            idx_to_label = {int(i): str(index_to_label[i]) for i in class_order}
+            return class_order, class_names, idx_to_label
+
+    fallback = {v: k for k, v in DEFAULT_LABEL_TO_INDEX.items()}
+    class_order = list(range(num_classes))
+    class_names = [fallback.get(i, str(i)) for i in class_order]
+    idx_to_label = {i: name for i, name in zip(class_order, class_names)}
+    return class_order, class_names, idx_to_label
+
+
+@torch.no_grad()
+def collect_predictions(head, loader: DataLoader, rank: int) -> Tuple[np.ndarray, np.ndarray]:
+    head.eval()
+    device = torch.device(f"cuda:{rank}") if torch.cuda.is_available() else torch.device("cpu")
+    preds: List[torch.Tensor] = []
+    labels: List[torch.Tensor] = []
+    for feats, lbls in loader:
+        feats = feats.to(device, non_blocking=True)
+        logits = head(feats)
+        preds.append(torch.argmax(logits, dim=1).cpu())
+        labels.append(lbls.cpu())
+    if not labels:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    return torch.cat(labels).numpy(), torch.cat(preds).numpy()
+
+
+def compute_macro_f1_and_recalls(
+    y_true: np.ndarray, y_pred: np.ndarray, class_order: Sequence[int]
+) -> Tuple[float, Dict[int, float]]:
+    if y_true.size == 0:
+        return 0.0, {int(c): 0.0 for c in class_order}
+    _, recalls, f1s, _ = precision_recall_fscore_support(
+        y_true,
+        y_pred,
+        labels=list(class_order),
+        zero_division=0,
+    )
+    recall_map = {int(cls_idx): float(rec) for cls_idx, rec in zip(class_order, recalls)}
+    macro_f1 = float(np.mean(f1s)) if len(f1s) else 0.0
+    return macro_f1, recall_map
+
+
 @dataclass
 class FeatureSplit:
     features: torch.Tensor
@@ -87,6 +181,11 @@ class FeatureCacheManager:
         self.model = model
         self.rank = rank
         self.world_size = world_size
+        self.train_subset_requested = resolve_train_subset_size(cfg)
+        self.train_subset_seed = int(cfg.system.random_seed)
+        self._train_subset_effective: Optional[int] = None
+        self._train_subset_total: Optional[int] = None
+        self._train_subset_indices: Optional[List[int]] = None
         if not getattr(cfg, "feature_cache_dir", ""):
             raise ValueError("cfg.feature_cache_dir must be set for cached training.")
         base_dir = Path(cfg.feature_cache_dir).expanduser()
@@ -100,6 +199,12 @@ class FeatureCacheManager:
             self.cache_dir = self.cache_dir / part
         perspective = str(getattr(cfg.dataset, "perspective", "camera")).lower()
         self.cache_dir = self.cache_dir / perspective
+        train_subset_tag = self._train_subset_tag()
+        if train_subset_tag is not None:
+            self.cache_dir = self.cache_dir / train_subset_tag
+        cue_tag = self._role_cue_tag(cfg)
+        if cue_tag is not None:
+            self.cache_dir = self.cache_dir / cue_tag
         if cfg.backbone.efficient_probe:
             self.cache_dir = self.cache_dir / "attentive"
         elif cfg.backbone.return_cls and not cfg.backbone.mean_pool:
@@ -125,13 +230,84 @@ class FeatureCacheManager:
         patch = getattr(model, "patch_size", "p?")
         return f"{name}_layer-{layer}_out-{output}_patch-{patch}"
 
+    @staticmethod
+    def _role_cue_tag(cfg: DictConfig) -> Optional[str]:
+        if not hasattr(cfg, "dataset"):
+            return None
+        if not hasattr(cfg.dataset, "role_cue_enabled"):
+            return None
+        enabled = bool(getattr(cfg.dataset, "role_cue_enabled", False))
+        if not enabled:
+            return "role_cue-off"
+        target_role = str(getattr(cfg.dataset, "role_cue_target_role", "subject")).lower()
+        black_bg = bool(getattr(cfg.dataset, "role_cue_black_background", True))
+        bg_tag = "blackbg" if black_bg else "origbg"
+        return f"role_cue-on_{target_role}_{bg_tag}"
+
+    def _resolve_train_subset_effective(self) -> Optional[int]:
+        if self.train_subset_requested is None:
+            return None
+        if self._train_subset_effective is not None:
+            return self._train_subset_effective
+        dataset = instantiate(self.cfg.dataset, split="train", seed=self.cfg.system.random_seed)
+        total = len(dataset)
+        effective = min(self.train_subset_requested, total)
+        self._train_subset_total = total
+        self._train_subset_effective = effective
+        return effective
+
+    def _train_subset_tag(self) -> Optional[str]:
+        if self.train_subset_requested is None:
+            return None
+        effective = self._resolve_train_subset_effective()
+        return (
+            f"train_subset-req{self.train_subset_requested}"
+            f"_eff{effective}_seed{self.train_subset_seed}"
+        )
+
+    def _sample_train_subset_indices(self, total_size: int) -> Optional[List[int]]:
+        if self.train_subset_requested is None:
+            return None
+        effective = min(self.train_subset_requested, total_size)
+        rng = np.random.RandomState(self.train_subset_seed)
+        selected = rng.choice(total_size, size=effective, replace=False)
+        selected = np.sort(selected).astype(int).tolist()
+        self._train_subset_total = total_size
+        self._train_subset_effective = effective
+        self._train_subset_indices = selected
+        return selected
+
+    def _subset_info_path(self) -> Optional[Path]:
+        if self.train_subset_requested is None:
+            return None
+        return self.cache_dir / "train_subset_indices.json"
+
+    def _save_subset_info(self):
+        info_path = self._subset_info_path()
+        if info_path is None:
+            return
+        payload = {
+            "requested_train_subset_size": int(self.train_subset_requested),
+            "effective_train_samples": int(self._train_subset_effective or 0),
+            "total_train_samples": int(self._train_subset_total or 0),
+            "seed": int(self.train_subset_seed),
+            "selected_indices": self._train_subset_indices or [],
+        }
+        with info_path.open("w") as f:
+            json.dump(payload, f, indent=2)
+
     def _cache_path(self, split: str) -> Path:
         return self.cache_dir / f"{split}.pt"
 
     def _extract_split(self, split: str, batch_size: int):
         dataset = instantiate(self.cfg.dataset, split=split, seed=self.cfg.system.random_seed)
+        dataset_for_loader: Dataset = dataset
+        if split == "train":
+            selected_indices = self._sample_train_subset_indices(len(dataset))
+            if selected_indices is not None:
+                dataset_for_loader = Subset(dataset, selected_indices)
         loader = DataLoader(
-            dataset,
+            dataset_for_loader,
             batch_size=batch_size,
             shuffle=False,
             num_workers=8,
@@ -156,6 +332,8 @@ class FeatureCacheManager:
         labels = torch.cat(labels, dim=0)
         cache_payload = {"features": features, "labels": labels}
         torch.save(cache_payload, self._cache_path(split))
+        if split == "train" and self.train_subset_requested is not None:
+            self._save_subset_info()
 
     def get_split(self, split: str, batch_size: int) -> FeatureSplit:
         if split in self._loaded:
@@ -631,9 +809,9 @@ def run_sweep(
     warmup_epochs = float(cfg.optimizer.warmup_epochs)
     num_classes = getattr(cfg.probe, "num_classes", 4)
 
-    result_dir = Path(cfg.output_dir) / "position_between_objects"
+    dataset_name, result_dir, _, sweep_csv = resolve_result_paths(cfg)
     result_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = result_dir / "position_between_objects_sweep_unreal.csv"
+    csv_path = sweep_csv
     new_file = not csv_path.exists()
 
     sweep_rows = []
@@ -677,22 +855,28 @@ def run_sweep(
     with open(csv_path, "a", newline="") as f:
         writer = csv.writer(f)
         if new_file:
-            writer.writerow(
-                [
-                    "Timestamp",
-                    "Model Checkpoint",
-                    "Patch Size",
-                    "Layer",
-                    "Output",
-                    "LR",
-                    "Weight Decay",
-                    "Epochs",
-                    "Best Val Balanced Acc",
-                    "Best Epoch",
-                ]
-            )
+            base_headers = [
+                "Timestamp",
+                "Model Checkpoint",
+                "Patch Size",
+                "Layer",
+                "Output",
+                "LR",
+                "Weight Decay",
+                "Epochs",
+                "Best Val Balanced Acc",
+                "Best Epoch",
+            ]
+            if dataset_name != "unreal_position":
+                headers = base_headers[:5] + ["Dataset"] + base_headers[5:]
+            else:
+                headers = base_headers
+            writer.writerow(headers)
         for row in sweep_rows:
-            writer.writerow(row)
+            out_row = list(row)
+            if dataset_name != "unreal_position":
+                out_row.insert(5, dataset_name)
+            writer.writerow(out_row)
 
     if getattr(cfg.sweep, "final_fit", True) and best_cfg is not None:
         trainval_split = cache_manager.get_trainval(cfg.batch_size)
@@ -712,20 +896,21 @@ def run_sweep(
         )
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(
-                [
-                    datetime.now().strftime("%d%m%Y-%H%M"),
-                    backbone.checkpoint_name,
-                    backbone.patch_size,
-                    str(backbone.layer),
-                    backbone.output,
-                    f"final_lr={best_cfg['lr']}",
-                    f"final_wd={best_cfg['wd']}",
-                    best_cfg.get("best_epoch", 0) + 1,
-                    f"test_bal_acc={test_bal}",
-                    "final",
-                ]
-            )
+            final_row = [
+                datetime.now().strftime("%d%m%Y-%H%M"),
+                backbone.checkpoint_name,
+                backbone.patch_size,
+                str(backbone.layer),
+                backbone.output,
+                f"final_lr={best_cfg['lr']}",
+                f"final_wd={best_cfg['wd']}",
+                best_cfg.get("best_epoch", 0) + 1,
+                f"test_bal_acc={test_bal}",
+                "final",
+            ]
+            if dataset_name != "unreal_position":
+                final_row.insert(5, dataset_name)
+            writer.writerow(final_row)
 
 def train_model(rank, world_size, cfg: DictConfig):
     set_random_seed(cfg.system.random_seed)
@@ -750,6 +935,9 @@ def train_model(rank, world_size, cfg: DictConfig):
     train_split = cache_manager.get_split("train", cfg.batch_size)
     val_split = cache_manager.get_split("valid", cfg.batch_size)
     test_split = cache_manager.get_split("test", cfg.batch_size)
+    train_subset_requested = resolve_train_subset_size(cfg)
+    train_subset_requested_value = int(train_subset_requested) if train_subset_requested is not None else 0
+    effective_train_samples = int(train_split.features.size(0))
     # # drop the whole sample which label is 0
     # train_split.features = train_split.features[train_split.labels != 0]
     # train_split.labels = train_split.labels[train_split.labels != 0]
@@ -780,15 +968,27 @@ def train_model(rank, world_size, cfg: DictConfig):
     train_loader = build_feature_loader("train", train_split, cfg.batch_size, world_size)
     val_loader = build_feature_loader("valid", val_split, cfg.batch_size, world_size=1)
     test_loader = build_feature_loader("test", test_split, cfg.batch_size, world_size=1)
+    metadata_dataset = instantiate(cfg.dataset, split="train", seed=cfg.system.random_seed)
+    num_classes = getattr(cfg.probe, "num_classes", 4)
+    class_order, class_names, idx_to_label = resolve_class_metadata(metadata_dataset, num_classes)
     # print train, val, test dataset sizes
     print(f"Train dataset size: {len(train_loader.dataset)}")
     print(f"Val dataset size: {len(val_loader.dataset)}")
     print(f"Test dataset size: {len(test_loader.dataset)}")
+    print(
+        f"Train subset requested: {train_subset_requested_value} "
+        f"(0 means full), effective train samples: {effective_train_samples}"
+    )
     # print class counts for train, val, test with mapping
-    label_mapping = {v: k for k, v in LABEL_TO_INDEX.items()}
-    print(f"Train class counts: {train_split.labels.bincount().tolist()}, {label_mapping}")
-    print(f"Val class counts: {val_split.labels.bincount().tolist()}, {label_mapping}")
-    print(f"Test class counts: {test_split.labels.bincount().tolist()}, {label_mapping}")
+    print(
+        f"Train class counts: {train_split.labels.bincount(minlength=num_classes).tolist()}, {idx_to_label}"
+    )
+    print(
+        f"Val class counts: {val_split.labels.bincount(minlength=num_classes).tolist()}, {idx_to_label}"
+    )
+    print(
+        f"Test class counts: {test_split.labels.bincount(minlength=num_classes).tolist()}, {idx_to_label}"
+    )
 
     steps_per_epoch = max(1, len(train_loader))
     total_steps = cfg.optimizer.n_epochs * steps_per_epoch
@@ -797,7 +997,6 @@ def train_model(rank, world_size, cfg: DictConfig):
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
 
     history = []
-    num_classes = getattr(cfg.probe, "num_classes", 4)
 
     for epoch in range(cfg.optimizer.n_epochs):
         if world_size > 1 and isinstance(train_loader.sampler, DistributedSampler):
@@ -836,23 +1035,16 @@ def train_model(rank, world_size, cfg: DictConfig):
 
     if rank == 0:
         timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-        result_dir = Path(cfg.output_dir) / "position_between_objects"
+        dataset_name, result_dir, final_csv, _ = resolve_result_paths(cfg)
         result_dir.mkdir(parents=True, exist_ok=True)
 
-        plot_dir = result_dir / "plots" / f"{cfg.dataset.perspective}" / f"{cfg.environment}" / f"{cfg.probe._target_.split('.')[-1]}" / f"{cfg.experiment_model}_{timestamp}"
+        plot_dir = resolve_plot_dir(cfg, result_dir, timestamp)
         plot_metrics(history, plot_dir, prefix=f"{cfg.experiment_name}_{timestamp}", model_name=cfg.experiment_model)
 
-        class_order = [
-            LABEL_TO_INDEX["Left"],
-            LABEL_TO_INDEX["Right"],
-            LABEL_TO_INDEX["Front"],
-            LABEL_TO_INDEX["Back"],
-        ]
-        class_names = ["Left", "Right", "Front", "Back"]
+        raw_test_dataset = instantiate(cfg.dataset, split='test', seed=cfg.system.random_seed)
+        class_order, class_names, idx_to_label = resolve_class_metadata(raw_test_dataset, num_classes)
         cm_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_confusion_{cfg.experiment_model}.png"
         save_confusion_matrix(head, test_loader, rank, class_order, class_names, cm_path)
-
-        raw_test_dataset = instantiate(cfg.dataset, split='test', seed=cfg.system.random_seed)
 
         sample_target = 20
         select_correct = False
@@ -863,7 +1055,6 @@ def train_model(rank, world_size, cfg: DictConfig):
                 select_correct = bool(cfg.visualization.correctly_classified)
         if sample_target > 0:
             mean, std = resolve_mean_std(cfg.dataset)
-            idx_to_label = {v: k for k, v in LABEL_TO_INDEX.items()}
             suffix = 'correct' if select_correct else 'misclassified'
             samples_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_{suffix}_{cfg.experiment_model}.png"
             save_prediction_samples(
@@ -880,27 +1071,34 @@ def train_model(rank, world_size, cfg: DictConfig):
                 select_correct,
             )
 
-        angle_bin_size = float(getattr(cfg.visualization, "angle_bin_size_deg", 15.0))
-        min_bin_count = int(getattr(cfg.visualization, "min_samples_per_angle_bin", 20))
-        class_focus = str(getattr(cfg.visualization, "class_focus", "all"))
-        radar_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_radar_{cfg.experiment_model}.png"
-        table_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_bins_{cfg.experiment_model}.csv"
-        grid_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_examples_{cfg.experiment_model}.png"
-        raw_val_dataset = instantiate(cfg.dataset, split='valid', seed=cfg.system.random_seed)
-        run_perspective_divergence_analysis(
-            head,
-            val_loader,
-            raw_val_dataset,
-            device,
-            radar_path,
-            table_path,
-            grid_path,
-            angle_bin_size,
-            min_bin_count,
-            class_focus=class_focus,
+        enable_perspective_divergence = bool(
+            getattr(cfg.visualization, "enable_perspective_divergence", True)
         )
+        if enable_perspective_divergence:
+            if dataset_name == "unreal_position":
+                angle_bin_size = float(getattr(cfg.visualization, "angle_bin_size_deg", 15.0))
+                min_bin_count = int(getattr(cfg.visualization, "min_samples_per_angle_bin", 20))
+                class_focus = str(getattr(cfg.visualization, "class_focus", "all"))
+                radar_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_radar_{cfg.experiment_model}.png"
+                table_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_bins_{cfg.experiment_model}.csv"
+                grid_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_perspective_examples_{cfg.experiment_model}.png"
+                raw_val_dataset = instantiate(cfg.dataset, split='valid', seed=cfg.system.random_seed)
+                run_perspective_divergence_analysis(
+                    head,
+                    val_loader,
+                    raw_val_dataset,
+                    device,
+                    radar_path,
+                    table_path,
+                    grid_path,
+                    angle_bin_size,
+                    min_bin_count,
+                    class_focus=class_focus,
+                )
+            else:
+                logger.info(f"Skipping perspective divergence analysis for dataset='{dataset_name}'.")
 
-        csv_path = result_dir / "position_between_objects_results_unreal_final.csv"
+        csv_path = final_csv
         is_new = not csv_path.exists()
         model_name = backbone.checkpoint_name
         patch_size = backbone.patch_size
@@ -909,68 +1107,168 @@ def train_model(rank, world_size, cfg: DictConfig):
 
         # Evaluate once more on validation with rank 0 head for summary
         val_loss, val_top1, val_top2, val_bal = evaluate(head, val_loader, rank, num_classes)
-
-        headers = [
-            "Timestamp",
-            "Model Checkpoint",
-            "Environment",
-            "Patch Size",
-            "Layer",
-            "Output",
-            "Probe Name",
-            "Random Seed",
-            "Num Epochs",
-            "Warmup Epochs",
-            "Probe LR",
-            "Model LR",
-            "Batch Size",
-            "Dropout Rate",
-            "Train Dataset",
-            "Val Dataset",
-            "Top1 Val",
-            "Top2 Val",
-            "Balanced Acc Val",
-            "Top1 Test",
-            "Top2 Test",
-            "Balanced Acc Test",
-            "Perspective"
-        ]
+        y_true, y_pred = collect_predictions(head, test_loader, rank)
+        macro_f1, class_recalls = compute_macro_f1_and_recalls(y_true, y_pred, class_order)
+        pred_path = plot_dir / f"{cfg.experiment_name}_{timestamp}_test_preds_{cfg.experiment_model}.npz"
+        np.savez_compressed(
+            pred_path,
+            y_true=y_true,
+            y_pred=y_pred,
+            class_order=np.asarray(class_order, dtype=np.int64),
+            class_names=np.asarray(class_names),
+        )
 
         probe_name = head.module.name if isinstance(head, DDP) else head.name
-        train_dataset_name = getattr(cfg.dataset, "name", "unreal_position")
+        train_dataset_name = dataset_name
         val_dataset_name = f"{train_dataset_name}_val"
 
-        row = [
-            timestamp,
-            model_name,
-            cfg.environment,
-            patch_size,
-            str(layer),
-            output,
-            probe_name,
-            cfg.system.random_seed,
-            cfg.optimizer.n_epochs,
-            cfg.optimizer.warmup_epochs,
-            cfg.optimizer.probe_lr,
-            0.0,
-            cfg.batch_size,
-            cfg.probe.dropout_rate,
-            train_dataset_name,
-            val_dataset_name,
-            f"{val_top1*100:.2f}",
-            f"{val_top2*100:.2f}",
-            f"{val_bal*100:.2f}",
-            f"{test_top1*100:.2f}",
-            f"{test_top2*100:.2f}",
-            f"{test_bal*100:.2f}",
-            cfg.dataset.perspective,
-        ]
+        if dataset_name == "unreal_position":
+            headers = [
+                "Timestamp",
+                "Model Checkpoint",
+                "Environment",
+                "Patch Size",
+                "Layer",
+                "Output",
+                "Probe Name",
+                "Random Seed",
+                "Num Epochs",
+                "Warmup Epochs",
+                "Probe LR",
+                "Weight Decay",
+                "Model LR",
+                "Batch Size",
+                "Train Subset Size",
+                "Effective Train Samples",
+                "Dropout Rate",
+                "Train Dataset",
+                "Val Dataset",
+                "Top1 Val",
+                "Top2 Val",
+                "Balanced Acc Val",
+                "Top1 Test",
+                "Top2 Test",
+                "Balanced Acc Test",
+                "Perspective",
+            ]
+            row = [
+                timestamp,
+                model_name,
+                cfg.environment,
+                patch_size,
+                str(layer),
+                output,
+                probe_name,
+                cfg.system.random_seed,
+                cfg.optimizer.n_epochs,
+                cfg.optimizer.warmup_epochs,
+                cfg.optimizer.probe_lr,
+                cfg.optimizer.weight_decay,
+                0.0,
+                cfg.batch_size,
+                train_subset_requested_value,
+                effective_train_samples,
+                cfg.probe.dropout_rate,
+                train_dataset_name,
+                val_dataset_name,
+                f"{val_top1*100:.2f}",
+                f"{val_top2*100:.2f}",
+                f"{val_bal*100:.2f}",
+                f"{test_top1*100:.2f}",
+                f"{test_top2*100:.2f}",
+                f"{test_bal*100:.2f}",
+                cfg.dataset.perspective,
+            ]
+        else:
+            headers = [
+                "Timestamp",
+                "Model Checkpoint",
+                "Environment",
+                "Patch Size",
+                "Layer",
+                "Output",
+                "Probe Name",
+                "Random Seed",
+                "Num Epochs",
+                "Warmup Epochs",
+                "Probe LR",
+                "Weight Decay",
+                "Model LR",
+                "Batch Size",
+                "Train Subset Size",
+                "Effective Train Samples",
+                "Dropout Rate",
+                "Train Dataset",
+                "Val Dataset",
+                "Input Mode",
+                "Top1 Val",
+                "Top2 Val",
+                "Balanced Acc Val",
+                "Top1 Test",
+                "Top2 Test",
+                "Balanced Acc Test",
+                "Macro F1 Test",
+                "Recall Left",
+                "Recall Right",
+                "Recall Front",
+                "Recall Back",
+                "Predictions Path",
+            ]
+            recall_values = {
+                "Left": class_recalls.get(class_order[class_names.index("Left")], 0.0) if "Left" in class_names else 0.0,
+                "Right": class_recalls.get(class_order[class_names.index("Right")], 0.0) if "Right" in class_names else 0.0,
+                "Front": class_recalls.get(class_order[class_names.index("Front")], 0.0) if "Front" in class_names else 0.0,
+                "Back": class_recalls.get(class_order[class_names.index("Back")], 0.0) if "Back" in class_names else 0.0,
+            }
+            row = [
+                timestamp,
+                model_name,
+                cfg.environment,
+                patch_size,
+                str(layer),
+                output,
+                probe_name,
+                cfg.system.random_seed,
+                cfg.optimizer.n_epochs,
+                cfg.optimizer.warmup_epochs,
+                cfg.optimizer.probe_lr,
+                cfg.optimizer.weight_decay,
+                0.0,
+                cfg.batch_size,
+                train_subset_requested_value,
+                effective_train_samples,
+                cfg.probe.dropout_rate,
+                train_dataset_name,
+                val_dataset_name,
+                getattr(cfg.dataset, "input_mode", getattr(cfg.dataset, "perspective", "default")),
+                f"{val_top1*100:.2f}",
+                f"{val_top2*100:.2f}",
+                f"{val_bal*100:.2f}",
+                f"{test_top1*100:.2f}",
+                f"{test_top2*100:.2f}",
+                f"{test_bal*100:.2f}",
+                f"{macro_f1*100:.2f}",
+                f"{recall_values['Left']*100:.2f}",
+                f"{recall_values['Right']*100:.2f}",
+                f"{recall_values['Front']*100:.2f}",
+                f"{recall_values['Back']*100:.2f}",
+                str(pred_path),
+            ]
 
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             if is_new:
                 writer.writerow(headers)
-            writer.writerow(row)
+                writer.writerow(row)
+            else:
+                with open(csv_path, "r", newline="") as fr:
+                    existing_headers = next(csv.reader(fr), [])
+                if existing_headers and existing_headers != headers:
+                    value_by_header = {h: v for h, v in zip(headers, row)}
+                    compatible_row = [value_by_header.get(h, "") for h in existing_headers]
+                    writer.writerow(compatible_row)
+                else:
+                    writer.writerow(row)
 
         if getattr(cfg, "save_head", False):
             head_to_save = head.module if isinstance(head, DDP) else head

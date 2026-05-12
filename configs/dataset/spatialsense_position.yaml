@@ -1,0 +1,15 @@
+_target_: evals.datasets.spatialsense_position.SpatialSenseRelativePosition
+root: /shared/sets/datasets/vision/SpatialSense
+split: train
+image_size: 224
+image_mean: imagenet
+directional_only: true
+positive_only: true
+drop_multi_positive_pairs: true
+input_mode: full_image # pair_union_crop, full_image
+perspective: full_image # pair_union_crop, full_image
+crop_padding_ratio: 0.10
+role_cue_enabled: true
+role_cue_target_role: subject # subject, object
+role_cue_black_background: true
+name: spatialsense_position
