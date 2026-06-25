@@ -1,0 +1,14 @@
+_target_: evals.datasets.real_world_position.RealWorldRelativePosition
+root: /shared/results/common/kargin/unreal_engine/dataset/position_between_objects/real_world_images
+split: train
+image_size: 224
+image_mean: imagenet
+split_mode: random # random, time_series, clip_block_random, clip_block_time_series
+train_ratio: 0.8
+valid_ratio: 0.1
+test_ratio: 0.1
+clip_block_size: 20
+clip_id_source: filename_numeric # filename_numeric, parent_folder
+perspective: lego_human
+recursive: true
+name: real_world_position

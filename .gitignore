@@ -181,5 +181,6 @@ analysis/aggregated*
 *.doc
 *.npy
 *.npz
+*.pt
 
 space/artifacts/

@@ -1,0 +1,84 @@
+_target_: evals.datasets.unreal_position_transfer.UnrealRelativePositionTransfer
+root: /shared/results/common/kargin/unreal_engine/dataset/position_between_objects
+split: train
+image_size: 224
+image_mean: imagenet
+perspective: camera
+human_label: Human
+exclude_ambiguous: true
+ambiguity_degrees: 15
+front_degrees: 45
+back_degrees: 135
+split_ratio: 0.2
+test_ratio: 0.1
+name: unreal_position_transfer
+protocol: loto_source_to_target # loto_source_to_target, target_only
+holdout_environment: bridge_2
+environments:
+  - bridge
+  - bridge_2
+  - bridge_3
+  - city
+  - city_2
+  - city_3
+  - desert
+  - desert_2
+  - desert_3
+  - desert_nonhuman
+  - forest
+  - forest_2
+  - forest_3
+  - winter_town
+  - winter_town_2
+  - winter_town_3
+excluded_environments:
+  - desert_nonhuman
+environment_to_labels:
+  bridge:
+    reference_label: Tree
+    target_label: Truck
+  forest:
+    reference_label: Tree
+    target_label: Rock
+  desert:
+    reference_label: Rock
+    target_label: Truck
+  winter_town:
+    reference_label: Tree
+    target_label: Truck
+  city:
+    reference_label: Cone
+    target_label: Vespa
+  bridge_2:
+    reference_label: TrashBin
+    target_label: Bike
+  forest_2:
+    reference_label: Tent
+    target_label: Bear
+  desert_2:
+    reference_label: Cactus
+    target_label: Camel
+  winter_town_2:
+    reference_label: Snowman
+    target_label: Husky
+  city_2:
+    reference_label: Hydrant
+    target_label: Taxi
+  bridge_3:
+    reference_label: TrashBin
+    target_label: Vespa
+  forest_3:
+    reference_label: Rock
+    target_label: Fox
+  desert_3:
+    reference_label: Barrel
+    target_label: Camel
+  winter_town_3:
+    reference_label: Tree
+    target_label: Deer
+  city_3:
+    reference_label: Cone
+    target_label: Bike
+  desert_nonhuman:
+    reference_label: Cactus
+    target_label: Camel

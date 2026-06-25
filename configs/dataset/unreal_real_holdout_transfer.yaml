@@ -1,0 +1,102 @@
+_target_: evals.datasets.unreal_real_holdout_transfer.UnrealRealHoldoutTransfer
+root: /shared/results/common/kargin/unreal_engine/dataset/position_between_objects
+real_world_root: /shared/results/common/kargin/unreal_engine/dataset/position_between_objects/real_world_images
+split: train
+image_size: 224
+image_mean: imagenet
+
+# Logical launcher perspective (human only for this protocol).
+perspective: human
+# Actual perspective folder used by real-world dataset.
+real_world_perspective: lego_human
+human_label: Human
+
+exclude_ambiguous: true
+ambiguity_degrees: 15
+front_degrees: 45
+back_degrees: 135
+
+# Unreal-side split controls (used when protocol=loto_source_to_target and split=train/valid).
+unreal_split_ratio: 0.2
+unreal_test_ratio: 0.1
+
+# Real-world-side split controls.
+split_mode: time_series # random, time_series, clip_block_random, clip_block_time_series
+train_ratio: 0.8
+valid_ratio: 0.1
+test_ratio: 0.1
+clip_block_size: 20
+clip_id_source: filename_numeric # filename_numeric, parent_folder
+recursive: true
+
+name: unreal_real_holdout_transfer
+protocol: loto_source_to_target # loto_source_to_target, target_only
+holdout_environment: real_world
+environments:
+  - bridge
+  - bridge_2
+  - bridge_3
+  - city
+  - city_2
+  - city_3
+  - desert
+  - desert_2
+  - desert_3
+  - desert_nonhuman
+  - forest
+  - forest_2
+  - forest_3
+  - winter_town
+  - winter_town_2
+  - winter_town_3
+excluded_environments:
+  - desert_nonhuman
+environment_to_labels:
+  bridge:
+    reference_label: Tree
+    target_label: Truck
+  forest:
+    reference_label: Tree
+    target_label: Rock
+  desert:
+    reference_label: Rock
+    target_label: Truck
+  winter_town:
+    reference_label: Tree
+    target_label: Truck
+  city:
+    reference_label: Cone
+    target_label: Vespa
+  bridge_2:
+    reference_label: TrashBin
+    target_label: Bike
+  forest_2:
+    reference_label: Tent
+    target_label: Bear
+  desert_2:
+    reference_label: Cactus
+    target_label: Camel
+  winter_town_2:
+    reference_label: Snowman
+    target_label: Husky
+  city_2:
+    reference_label: Hydrant
+    target_label: Taxi
+  bridge_3:
+    reference_label: TrashBin
+    target_label: Vespa
+  forest_3:
+    reference_label: Rock
+    target_label: Fox
+  desert_3:
+    reference_label: Barrel
+    target_label: Camel
+  winter_town_3:
+    reference_label: Tree
+    target_label: Deer
+  city_3:
+    reference_label: Cone
+    target_label: Bike
+  desert_nonhuman:
+    reference_label: Cactus
+    target_label: Camel

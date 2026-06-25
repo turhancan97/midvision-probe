@@ -196,6 +196,137 @@ python train_position_between_objects.py backbone=dino_b16 experiment_model=posi
 - Unreal dataset is used for training and testing the linear, AbMILP, and efficient probe for position between objects.
 - W&B logging follows the same pattern as other experiments.
 
+### Position Between Objects Rebuttal (Real-World Folder Dataset)
+-----------
+- The previous SpatialSense rebuttal path was retired and replaced by a folder-based real-world dataset:
+  - Root: `/shared/results/common/kargin/unreal_engine/dataset/position_between_objects/real_world_images`
+  - Class folders: `front`, `back`, `left`, `right`
+- New dataset config key: `dataset=real_world_position` (`configs/dataset/real_world_position.yaml`).
+- Supported split modes:
+  - `random`: stratified per-class shuffle, deterministic by seed
+  - `time_series`: per-class lexicographic order with strict 80/10/10 (train/valid/test)
+  - `clip_block_random`: split by contiguous frame blocks, then shuffle blocks
+  - `clip_block_time_series`: split by contiguous frame blocks in chronological order
+
+- Rebuttal launcher (same script path, now real-world behavior):
+```bash
+python launch_script/spatialsense_rebuttal.py \
+  --output-dir result_real_world_rebuttal \
+  --backbones dino_b16,dinov2_b14_reg,vggt_l16 \
+  --heads EfficientProbing,ABMILP,GAP \
+  --split-modes random,time_series,clip_block_random,clip_block_time_series
+```
+
+- Seed control options:
+  - `--seeds`: comma-separated seed list for this run (default: `8,42,123`)
+  - `--tune-seed`: optional seed used in tuning stage (default: first value from `--seeds`)
+  - `--clip-block-size`: block size used by clip-block split modes (default: `20`)
+  - `--clip-id-source`: clip block grouping source (`filename_numeric` or `parent_folder`)
+  - If only one seed is provided, launcher runs both tune and final stage for that seed.
+  - If multiple seeds are provided, final stage excludes `--tune-seed` unless `--rerun-seed8-final` is set.
+
+- Example: run only one seed
+```bash
+python launch_script/spatialsense_rebuttal.py \
+  --output-dir result_real_world_rebuttal \
+  --backbones vggt_l16 \
+  --heads EfficientProbing \
+  --split-modes random \
+  --seeds 8
+```
+
+- Example: custom seed subset with explicit tuning seed
+```bash
+python launch_script/spatialsense_rebuttal.py \
+  --output-dir result_real_world_rebuttal \
+  --backbones vggt_l16 \
+  --heads EfficientProbing,ABMILP,GAP \
+  --split-modes random,time_series \
+  --seeds 42,123 \
+  --tune-seed 42
+```
+
+- SLURM launcher:
+```bash
+sbatch zrun_launch_train_spatialsense_rebuttal.sh
+```
+
+- Summarization:
+```bash
+python scripts/summarize_spatialsense_rebuttal.py \
+  --results-csv result_real_world_rebuttal/position_between_objects/real_world_position/position_between_objects_results_real_world_position.csv \
+  --output-dir result_real_world_rebuttal/position_between_objects/real_world_position/reports \
+  --dataset-root /shared/results/common/kargin/unreal_engine/dataset/position_between_objects/real_world_images
+```
+
+- Outputs:
+  - Run CSV: `result_real_world_rebuttal/position_between_objects/real_world_position/position_between_objects_results_real_world_position.csv`
+  - Reports: `result_real_world_rebuttal/position_between_objects/real_world_position/reports/`
+  - Rebuttal best params: `result_real_world_rebuttal/real_world_rebuttal_best_params.json`
+
+### Position Between Objects Transfer Rebuttal (Unreal LOTO + Few-shot)
+-----------
+- Added a transfer protocol for rebuttal experiments on Unreal SpaRRTa:
+  - `loto_source_to_target`: train/val on non-holdout environments, test on holdout environment
+  - `target_only`: train/val/test on holdout environment (used for few-shot adaptation)
+- Dataset config: `configs/dataset/unreal_position_transfer.yaml`
+- Dataset implementation: `evals/datasets/unreal_position_transfer.py`
+- Training script: `train_position_between_objects_with_cache.py` (supports optional probe init via `ckpt_path`).
+
+- Rebuttal launcher (full matrix):
+```bash
+python launch_script/unreal_loto_fewshot_rebuttal.py --output-dir result_unreal_loto_rebuttal
+```
+
+- SLURM launcher:
+```bash
+sbatch zrun_launch_train_unreal_loto_fewshot_rebuttal.sh
+```
+
+- Summarization:
+```bash
+python scripts/summarize_unreal_loto_fewshot_rebuttal.py \
+  --results-csv result_unreal_loto_rebuttal/position_between_objects/unreal_position_transfer/position_between_objects_results_unreal_position_transfer.csv \
+  --output-dir result_unreal_loto_rebuttal/position_between_objects/unreal_position_transfer/reports
+```
+
+- Locked matrix defaults in launcher:
+  - Backbones: `vggt_l16`, `dinov2_l14_reg`
+  - Heads: `EfficientProbing`, `ClassificationHead` (GAP)
+  - Perspectives: `camera`, `human`
+  - Holdout folds: `bridge_2`, `city_2`, `desert_2`, `forest_2`, `winter_town_2`
+  - Excluded envs: `desert_nonhuman`
+  - Seeds: `8, 42, 123`
+  - Few-shot K: `10, 50, 100, 500` (+ `K=0` zero-shot point)
+
+- Outputs:
+  - Run CSV: `result_unreal_loto_rebuttal/position_between_objects/unreal_position_transfer/position_between_objects_results_unreal_position_transfer.csv`
+  - Reports: `result_unreal_loto_rebuttal/position_between_objects/unreal_position_transfer/reports/`
+  - Per-run saved predictions (`Predictions Path`) and optional zero-shot probe checkpoints (`Head Path`) are logged in CSV rows.
+
+- Pair-swap mode (target-fixed reference-swap transfer):
+  - Enable with launcher flags:
+    - `--pair-swap-mode`
+    - `--pair-swap-source-env <ENV>`
+    - `--pair-swap-target-env <ENV>`
+  - Behavior when enabled:
+    - Uses only `dataset.environments=[source_env,target_env]`
+    - Sets holdout to `target_env` (so `--holdout-folds` is ignored)
+    - Zero-shot (`loto_source_to_target`): train/val on `source_env`, test on `target_env`
+    - Few-shot (`target_only`): train/val/test on `target_env` for both `transfer` and `scratch`
+  - Example (`desert_2 -> desert_3`):
+```bash
+python launch_script/unreal_loto_fewshot_rebuttal.py \
+  --output-dir result_unreal_loto_rebuttal \
+  --pair-swap-mode \
+  --pair-swap-source-env desert_2 \
+  --pair-swap-target-env desert_3
+```
+  - Equivalent SLURM config in `zrun_launch_train_unreal_loto_fewshot_rebuttal.sh`:
+    - `PAIR_SWAP_MODE=true`
+    - `PAIR_SWAP_SOURCE_ENV="desert_2"`
+    - `PAIR_SWAP_TARGET_ENV="desert_3"`
+
 ### Equivariance (Unreal)
 
 - Train a linear probe to regress the position of the camera.
